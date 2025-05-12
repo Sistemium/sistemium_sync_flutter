@@ -383,7 +383,7 @@ String mapMongoTypeToDart(String mongoType) {
     case 'buffer':
       return 'Uint8List';
     default:
-      print("Warning: Unknown MongoDB type '$mongoType'. Mapping to 'Object'.");
-      return 'Object';
+      print("Warning: Unknown MongoDB type '$mongoType'. Mapping to 'String'.");
+      return 'String';
   }
 }
