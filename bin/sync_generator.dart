@@ -27,10 +27,9 @@ void main(List<String> args) async {
     }
 
     final List<dynamic> allModels = jsonDecode(response.body);
-    final List<dynamic> appModels =
-        allModels
-            .where((m) => m['app_id'] == targetAppId && m['version'] is int)
-            .toList();
+    final List<dynamic> appModels = allModels
+        .where((m) => m['app_id'] == targetAppId && m['version'] is int)
+        .toList();
     if (appModels.isEmpty) {
       print('Error: No valid models found for app_id "$targetAppId".');
       exit(1);
@@ -61,14 +60,13 @@ void main(List<String> args) async {
       exit(1);
     }
 
-    final List<dynamic> syncableTables =
-        modelDefaults['syncable_tables'] is List
-            ? List<dynamic>.from(modelDefaults['syncable_tables'])
-            : [];
-    final List<dynamic> unsyncableTables =
-        modelDefaults['unsyncable_tables'] is List
-            ? List<dynamic>.from(modelDefaults['unsyncable_tables'])
-            : [];
+    final List<dynamic> entities = modelDefaults['entities'] is List
+        ? List<dynamic>.from(modelDefaults['entities'])
+        : [];
+    final List<dynamic> syncableEntities = entities
+        .where((e) =>
+            e is Map<String, dynamic> && (e['is_syncable'] == true))
+        .toList();
 
     final buffer = StringBuffer();
 
@@ -127,17 +125,14 @@ void main(List<String> args) async {
     buffer.writeln('}');
     buffer.writeln();
 
-    final allTables = [...syncableTables, ...unsyncableTables];
     final Set<String> generatedClasses = {};
 
-    for (final tableData in allTables) {
-      if (tableData is! Map<String, dynamic>) continue;
-      final tableName = tableData['name'] as String?;
-      final columns =
-          tableData['columns'] is List
-              ? List<dynamic>.from(tableData['columns'])
-              : [];
-      if (tableName == null || tableName.isEmpty || columns.isEmpty) continue;
+    for (final entityData in entities) {
+      if (entityData is! Map<String, dynamic>) continue;
+      final tableName = entityData['name'] as String?;
+      final fields =
+          entityData['fields'] is List ? List<dynamic>.from(entityData['fields']) : [];
+      if (tableName == null || tableName.isEmpty || fields.isEmpty) continue;
 
       final className = capitalize(tableName);
       if (generatedClasses.contains(className)) continue;
@@ -148,18 +143,17 @@ void main(List<String> args) async {
       final List<String> initList = [];
       final List<String> paramDecls = [];
 
-      for (final columnData in columns) {
-        if (columnData is! Map<String, dynamic>) continue;
-        final columnName = columnData['name'] as String?;
-        final columnType = columnData['type'] as String?;
-        if (columnName == null ||
-            columnName.isEmpty ||
-            columnType == null ||
-            columnType.isEmpty)
-          continue;
+      for (final fieldData in fields) {
+        if (fieldData is! Map<String, dynamic>) continue;
+        final fieldNameStr = fieldData['name'] as String?;
+        final fieldTypeStr = fieldData['type'] as String?;
+        if (fieldNameStr == null ||
+            fieldNameStr.isEmpty ||
+            fieldTypeStr == null ||
+            fieldTypeStr.isEmpty) continue;
 
-        final dartType = mapMongoTypeToDart(columnType);
-        final fieldName = columnName;
+        final dartType = mapMongoTypeToDart(fieldTypeStr);
+        final fieldName = fieldNameStr;
         buffer.writeln('  final $dartType? $fieldName;');
 
         final bool isPrivate = fieldName.startsWith('_');
@@ -188,18 +182,17 @@ void main(List<String> args) async {
         '  factory $className.fromMap(Map<String, dynamic> map) {',
       );
       buffer.writeln('    return $className(');
-      for (final columnData in columns) {
-        if (columnData is! Map<String, dynamic>) continue;
-        final columnName = columnData['name'] as String?;
-        final columnType = columnData['type'] as String?;
-        if (columnName == null ||
-            columnName.isEmpty ||
-            columnType == null ||
-            columnType.isEmpty)
-          continue;
+      for (final fieldData in fields) {
+        if (fieldData is! Map<String, dynamic>) continue;
+        final fieldNameStr = fieldData['name'] as String?;
+        final fieldTypeStr = fieldData['type'] as String?;
+        if (fieldNameStr == null ||
+            fieldNameStr.isEmpty ||
+            fieldTypeStr == null ||
+            fieldTypeStr.isEmpty) continue;
 
-        final dartType = mapMongoTypeToDart(columnType);
-        final fieldName = columnName;
+        final dartType = mapMongoTypeToDart(fieldTypeStr);
+        final fieldName = fieldNameStr;
         final bool isPrivate = fieldName.startsWith('_');
         final paramName = isPrivate ? 'internal$fieldName' : fieldName;
 
@@ -229,18 +222,17 @@ void main(List<String> args) async {
 
       buffer.writeln('  Map<String, dynamic> toMap() {');
       buffer.writeln('    return {');
-      for (final columnData in columns) {
-        if (columnData is! Map<String, dynamic>) continue;
-        final columnName = columnData['name'] as String?;
-        final columnType = columnData['type'] as String?;
-        if (columnName == null ||
-            columnName.isEmpty ||
-            columnType == null ||
-            columnType.isEmpty)
-          continue;
+      for (final fieldData in fields) {
+        if (fieldData is! Map<String, dynamic>) continue;
+        final fieldNameStr = fieldData['name'] as String?;
+        final fieldTypeStr = fieldData['type'] as String?;
+        if (fieldNameStr == null ||
+            fieldNameStr.isEmpty ||
+            fieldTypeStr == null ||
+            fieldTypeStr.isEmpty) continue;
 
-        final fieldName = columnName;
-        final dartType = mapMongoTypeToDart(columnType);
+        final fieldName = fieldNameStr;
+        final dartType = mapMongoTypeToDart(fieldTypeStr);
 
         buffer.write("      '$fieldName': $fieldName");
         if (dartType == 'DateTime') {
@@ -261,26 +253,20 @@ void main(List<String> args) async {
     buffer.writeln('class MetaEntity extends AbstractMetaEntity {');
     buffer.writeln('  @override');
     buffer.writeln('  final Map<String, String> syncableColumns = {');
-    for (final tableData in syncableTables) {
-      if (tableData is! Map<String, dynamic>) continue;
-      final tableName = tableData['name'] as String?;
-      final columns =
-          tableData['columns'] is List
-              ? List<dynamic>.from(tableData['columns'])
-              : [];
-      if (tableName == null || tableName.isEmpty || columns.isEmpty) continue;
+    for (final entityData in syncableEntities) {
+      if (entityData is! Map<String, dynamic>) continue;
+      final tableName = entityData['name'] as String?;
+      final fields =
+          entityData['fields'] is List ? List<dynamic>.from(entityData['fields']) : [];
+      if (tableName == null || tableName.isEmpty || fields.isEmpty) continue;
 
-      final columnNames =
-          columns
-              .map(
-                (col) =>
-                    col is Map<String, dynamic> ? col['name'] as String? : null,
-              )
-              .where(
-                (name) =>
-                    name != null && name.isNotEmpty && name != 'is_unsynced',
-              )
-              .toList();
+      final columnNames = fields
+          .map((f) => f is Map<String, dynamic> ? f['name'] as String? : null)
+          .where(
+            (name) =>
+                name != null && name.isNotEmpty && name != 'is_unsynced',
+          )
+          .toList();
       buffer.writeln("    '$tableName': '${columnNames.join(', ')}',");
     }
     buffer.writeln('  };');
@@ -349,15 +335,8 @@ void generateSqlExecutionCode(
 
 String escapeSqlString(String sql) => sql.replaceAll("'''", "'''\"'\"'\"'''");
 
-String capitalize(String s) => s
-    .split('_')
-    .map(
-      (part) =>
-          part.isEmpty
-              ? ''
-              : part[0].toUpperCase() + part.substring(1).toLowerCase(),
-    )
-    .join('');
+String capitalize(String s) =>
+    s.split('_').map((part) => part.isEmpty ? '' : part[0].toUpperCase() + part.substring(1).toLowerCase()).join('');
 
 String mapMongoTypeToDart(String mongoType) {
   final lower = mongoType.toLowerCase();

@@ -135,7 +135,7 @@ class BackendWrapper extends InheritedWidget {
     for (var table in syncingTables) {
       int pageSize = 1000;
       bool hasMoreData = true;
-      String? lastReceivedLts = table['lts']?.toString() ?? '';
+      String? lastReceivedLts = table['last_received_lts']?.toString() ?? '';
 
       while (hasMoreData) {
         await fetchData(
@@ -183,7 +183,7 @@ ON CONFLICT($primaryKey) DO UPDATE SET $updateAssignments;
               if (data.length < pageSize) {
                 hasMoreData = false;
                 await tx.execute(
-                  'UPDATE syncing_table SET lts = ? WHERE id = ?',
+                  'UPDATE syncing_table SET last_received_lts = ? WHERE id = ?',
                   [data.last["lts"], name],
                 );
               } else {
