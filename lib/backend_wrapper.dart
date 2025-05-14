@@ -139,13 +139,13 @@ class BackendWrapper extends InheritedWidget {
 
       while (hasMoreData) {
         await fetchData(
-          name: table['id'],
+          name: table['entity_name'],
           lastReceivedLts: lastReceivedLts,
           pageSize: pageSize,
           onDataReceived: (Map<String, dynamic> response) async {
             await _db.value!.writeTransaction((tx) async {
               final ResultSet result = await tx.getAll(
-                'select * from ${table['id']} where is_unsynced = 1',
+                'select * from ${table['entity_name']} where is_unsynced = 1',
               );
               if (result.isNotEmpty) {
                 hasMoreData = false;
@@ -157,8 +157,8 @@ class BackendWrapper extends InheritedWidget {
                 hasMoreData = false;
                 return;
               }
-              final name = table['id'];
-              final primaryKey = 'id';
+              final name = table['entity_name'];
+              final primaryKey = '_id';
               final columns = response['data'][0].keys.toList();
               final placeholders = List.filled(columns.length, '?').join(', ');
               final columnsToUpdate = columns.where((k) => k != primaryKey);
@@ -183,7 +183,7 @@ ON CONFLICT($primaryKey) DO UPDATE SET $updateAssignments;
               if (data.length < pageSize) {
                 hasMoreData = false;
                 await tx.execute(
-                  'UPDATE syncing_table SET last_received_lts = ? WHERE id = ?',
+                  'UPDATE syncing_table SET last_received_lts = ? WHERE name = ?',
                   [data.last["lts"], name],
                 );
               } else {
@@ -201,11 +201,11 @@ ON CONFLICT($primaryKey) DO UPDATE SET $updateAssignments;
 
   write({required String tableName, required Map data}) async {
     final db = _db.value!;
-    if (data['id'] == null) {
-      data['id'] = Uuid().v4();
+    if (data['_id'] == null) {
+      data['_id'] = Uuid().v4();
     }
     final columns = data.keys.toList();
-    if (!columns.contains('id')) {}
+    if (!columns.contains('_id')) {}
     final values = data.values.toList();
     final placeholders = List.filled(columns.length, '?').join(', ');
     final updatePlaceholders = columns.map((col) => '$col = ?').join(', ');
@@ -213,7 +213,7 @@ ON CONFLICT($primaryKey) DO UPDATE SET $updateAssignments;
     final sql = '''
       INSERT INTO $tableName (${columns.join(', ')}, is_unsynced)
       VALUES ($placeholders, 1)
-      ON CONFLICT(id) DO UPDATE SET
+      ON CONFLICT(_id) DO UPDATE SET
       $updatePlaceholders, is_unsynced = 1
     ''';
 
@@ -223,7 +223,7 @@ ON CONFLICT($primaryKey) DO UPDATE SET $updateAssignments;
   }
 
   delete({required String tableName, required String id}) async {
-    final primaryKey = 'id';
+    final primaryKey = '_id';
     final db = _db.value!;
 
     final sql = '''
@@ -240,7 +240,7 @@ ON CONFLICT($primaryKey) DO UPDATE SET $updateAssignments;
     bool shouldBreakAndRetry = false;
     for (var table in syncingTables) {
       final ResultSet result = await db.getAll(
-        'select ${abstractMetaEntity.syncableColumns[table['id']]} from ${table['id']} where is_unsynced = 1',
+        'select ${abstractMetaEntity.syncableColumns[table['_id']]} from ${table['_id']} where is_unsynced = 1',
       );
       if (result.isEmpty) {
         continue;
@@ -249,7 +249,7 @@ ON CONFLICT($primaryKey) DO UPDATE SET $updateAssignments;
       final response = await http.post(
         uri,
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'name': table['id'], 'data': jsonEncode(result)}),
+        body: jsonEncode({'name': table['_id'], 'data': jsonEncode(result)}),
       );
       print('Response: ${response.body}');
       print('Response Code: ${response.statusCode}');
@@ -261,14 +261,14 @@ ON CONFLICT($primaryKey) DO UPDATE SET $updateAssignments;
       await db.writeTransaction((tx) async {
         //todo: not sure if this most efficient way
         final ResultSet result2 = await tx.getAll(
-          'select ${abstractMetaEntity.syncableColumns[table['id']]} from ${table['id']} where is_unsynced = 1',
+          'select ${abstractMetaEntity.syncableColumns[table['_id']]} from ${table['_id']} where is_unsynced = 1',
         );
         if (DeepCollectionEquality().equals(result, result2)) {
           await tx.execute(
-            'delete from ${table['id']} where is_unsynced = 1 and is_deleted = 1',
+            'delete from ${table['_id']} where is_unsynced = 1 and is_deleted = 1',
           );
           await tx.execute(
-            'update ${table['id']} set is_unsynced = 0 where is_unsynced = 1',
+            'update ${table['_id']} set is_unsynced = 0 where is_unsynced = 1',
           );
         } else {
           shouldBreakAndRetry = true;
