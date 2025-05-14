@@ -183,7 +183,7 @@ ON CONFLICT($primaryKey) DO UPDATE SET $updateAssignments;
               if (data.length < pageSize) {
                 hasMoreData = false;
                 await tx.execute(
-                  'UPDATE syncing_table SET last_received_lts = ? WHERE name = ?',
+                  'UPDATE syncing_table SET last_received_lts = ? WHERE entity_name = ?',
                   [data.last["lts"], name],
                 );
               } else {
