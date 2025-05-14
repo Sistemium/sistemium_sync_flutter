@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:objectid/objectid.dart';
 import 'dart:convert';
 import 'package:sqlite_async/sqlite3.dart';
 import 'package:sqlite_async/sqlite3_common.dart';
@@ -11,7 +12,6 @@ import 'package:path/path.dart' as p;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:collection/collection.dart';
 import 'package:sistemium_sync_flutter/sync_abstract.dart';
-import 'package:uuid/uuid.dart';
 
 class BackendWrapper extends InheritedWidget {
   final ValueNotifier<bool> inited = ValueNotifier<bool>(false);
@@ -202,7 +202,7 @@ ON CONFLICT($primaryKey) DO UPDATE SET $updateAssignments;
   write({required String tableName, required Map data}) async {
     final db = _db.value!;
     if (data['_id'] == null) {
-      data['_id'] = Uuid().v4();
+      data['_id'] = ObjectId();
     }
     final columns = data.keys.toList();
     if (!columns.contains('_id')) {}
