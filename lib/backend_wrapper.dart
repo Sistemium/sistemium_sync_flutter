@@ -25,6 +25,7 @@ class BackendWrapper extends InheritedWidget {
   final AbstractPregeneratedMigrations abstractPregeneratedMigrations;
   final AbstractSyncConstants abstractSyncConstants;
   final AbstractMetaEntity abstractMetaEntity;
+  late final _serverUrl;
 
   BackendWrapper({
     super.key,
@@ -32,9 +33,7 @@ class BackendWrapper extends InheritedWidget {
     required this.abstractPregeneratedMigrations,
     required this.abstractSyncConstants,
     required this.abstractMetaEntity,
-  }) {
-    _initDb();
-  }
+  });
 
   static BackendWrapper? maybeOf(BuildContext context) =>
       context.dependOnInheritedWidgetOfExactType<BackendWrapper>();
@@ -42,7 +41,12 @@ class BackendWrapper extends InheritedWidget {
   @override
   bool updateShouldNotify(BackendWrapper oldWidget) => false;
 
-  Future _initDb() async {
+  Future initDb({String? serverUrl}) async {
+    if (serverUrl != null) {
+      _serverUrl = serverUrl;
+    } else {
+      _serverUrl = abstractSyncConstants.serverUrl;
+    }
     final SqliteDatabase tempDb = await openDatabase();
     final migrations = abstractPregeneratedMigrations.migrations;
     await migrations.migrate(tempDb);
@@ -111,7 +115,7 @@ class BackendWrapper extends InheritedWidget {
       queryParams['lts'] = lastReceivedLts;
     }
     final uri = Uri.parse(
-      '${abstractSyncConstants.serverUrl}/data',
+      '$_serverUrl/data',
     ).replace(queryParameters: queryParams);
     final response = await http.get(uri);
 
@@ -245,7 +249,7 @@ ON CONFLICT($primaryKey) DO UPDATE SET $updateAssignments;
       if (result.isEmpty) {
         continue;
       }
-      final uri = Uri.parse('${abstractSyncConstants.serverUrl}/data');
+      final uri = Uri.parse('$_serverUrl/data');
       final response = await http.post(
         uri,
         headers: {'Content-Type': 'application/json'},
@@ -284,7 +288,7 @@ ON CONFLICT($primaryKey) DO UPDATE SET $updateAssignments;
   Future<void> startSyncer() async {
     if (_sseConnected.value) return;
 
-    final uri = Uri.parse('${abstractSyncConstants.serverUrl}/events');
+    final uri = Uri.parse('$_serverUrl/events');
     final client = http.Client();
 
     try {
