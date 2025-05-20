@@ -111,12 +111,18 @@ class BackendWrapper extends InheritedWidget {
   }
 
   Future<String> getDatabasePath(String dbName) async {
-    Directory? directory;
+    String basePath = '';
     if (!kIsWeb) {
-      directory = await getApplicationDocumentsDirectory();
+      final dir = await getApplicationDocumentsDirectory();
+      basePath = dir.path;
     }
-    final dbPath = p.join(directory?.path ?? '', dbName);
-    return dbPath;
+    final fullPath = p.join(basePath, dbName);
+    final dirPath = p.dirname(fullPath);
+    final dirToCreate = Directory(dirPath);
+    if (!await dirToCreate.exists()) {
+      await dirToCreate.create(recursive: true);
+    }
+    return fullPath;
   }
 
   Future<void> fetchData({
