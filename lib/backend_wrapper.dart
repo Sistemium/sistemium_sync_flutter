@@ -205,11 +205,12 @@ ON CONFLICT($primaryKey) DO UPDATE SET $updateAssignments;
 
   write({required String tableName, required Map data}) async {
     final db = _db.value!;
-    if (data['_id'] == null) {
-      data['_id'] = ObjectId().hexString;
-    }
     final columns = data.keys.toList();
-    if (!columns.contains('_id')) {}
+    if (!columns.contains('_id')) {
+      if (data['_id'] == null) {
+        data['_id'] = ObjectId().hexString;
+      }
+    }
     final values = data.values.toList();
     final placeholders = List.filled(columns.length, '?').join(', ');
     final updatePlaceholders = columns.map((col) => '$col = ?').join(', ');
