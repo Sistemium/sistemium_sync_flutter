@@ -1,17 +1,17 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
+import 'package:collection/collection.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:objectid/objectid.dart';
-import 'dart:convert';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
+import 'package:sistemium_sync_flutter/sync_abstract.dart';
 import 'package:sqlite_async/sqlite3.dart';
 import 'package:sqlite_async/sqlite3_common.dart';
 import 'package:sqlite_async/sqlite_async.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:path/path.dart' as p;
-import 'package:flutter/foundation.dart' show kIsWeb;
-import 'package:collection/collection.dart';
-import 'package:sistemium_sync_flutter/sync_abstract.dart';
 
 class BackendWrapper extends InheritedWidget {
   final ValueNotifier<bool> inited = ValueNotifier<bool>(false);
@@ -26,6 +26,7 @@ class BackendWrapper extends InheritedWidget {
   final AbstractSyncConstants abstractSyncConstants;
   final AbstractMetaEntity abstractMetaEntity;
   late final _serverUrl;
+  late final userId;
 
   BackendWrapper({
     super.key,
@@ -41,12 +42,13 @@ class BackendWrapper extends InheritedWidget {
   @override
   bool updateShouldNotify(BackendWrapper oldWidget) => false;
 
-  Future initDb({String? serverUrl}) async {
+  Future initDb({String? serverUrl, required String userId}) async {
     if (serverUrl != null) {
       _serverUrl = serverUrl;
     } else {
       _serverUrl = abstractSyncConstants.serverUrl;
     }
+    this.userId = userId;
     final SqliteDatabase tempDb = await openDatabase();
     final migrations = abstractPregeneratedMigrations.migrations;
     await migrations.migrate(tempDb);
@@ -55,6 +57,19 @@ class BackendWrapper extends InheritedWidget {
     inited.value = true;
     print('Database initialized');
     print(inited.value);
+  }
+
+  Future deinitDb() async {
+    print('Deinitializing database...');
+    _eventSubscription.value?.cancel();
+    _eventSubscription.value = null;
+    _sseConnected.value = false;
+    if (_db.value != null) {
+      await _db.value!.close();
+    }
+    _db.value = null;
+    inited.value = false;
+    print('Database deinitialized');
   }
 
   Stream<List> watch({
@@ -82,7 +97,7 @@ class BackendWrapper extends InheritedWidget {
   }
 
   Future<SqliteDatabase> openDatabase() async {
-    final dbPath = await getDatabasePath('helper_sync.db');
+    final dbPath = await getDatabasePath('$userId/helper_sync.db');
     final db = SqliteDatabase(
       path: dbPath,
       options: SqliteOptions(
@@ -153,7 +168,7 @@ class BackendWrapper extends InheritedWidget {
               );
               if (result.isNotEmpty) {
                 hasMoreData = false;
-                //might there be infinite loop, perhaps we need to log something to sentry for debug purposes
+                //todo: might there be infinite loop, perhaps we need to log something to sentry for debug purposes
                 needRepeatFullSync = true;
                 return;
               }
@@ -308,7 +323,7 @@ ON CONFLICT($primaryKey) DO UPDATE SET $updateAssignments;
                 if (event.startsWith('data:')) {
                   final data = jsonDecode(event.substring(5));
                   print('Data Changed: $data');
-                  //todo performance improvement, maybe fe do not need full here
+                  //todo: performance improvement, maybe we do not need full here
                   fullSync();
                 }
               },
