@@ -64,8 +64,7 @@ void main(List<String> args) async {
         ? List<dynamic>.from(modelDefaults['entities'])
         : [];
     final List<dynamic> syncableEntities = entities
-        .where((e) =>
-            e is Map<String, dynamic> && (e['is_syncable'] == true))
+        .whereType<Map<String, dynamic>>()
         .toList();
 
     final buffer = StringBuffer();

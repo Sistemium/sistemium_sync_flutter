@@ -75,9 +75,10 @@ class BackendWrapper extends InheritedWidget {
     String order = '',
   }) {
     String defaultWhere = ' where (is_deleted != 1 OR is_deleted IS NULL) ';
+    String _where = where.isNotEmpty ? ' AND ($where)' : '';
     String _order = order.isNotEmpty ? ' ORDER BY $order' : '';
     return db.value!.watch(
-      sql + defaultWhere + where + _order,
+      sql + defaultWhere + _where + _order,
       triggerOnTables: tables,
     );
   }
@@ -88,10 +89,10 @@ class BackendWrapper extends InheritedWidget {
     String order = '',
   }) {
     String defaultWhere = ' where (is_deleted != 1 OR is_deleted IS NULL) ';
+    String _where = where.isNotEmpty ? ' AND ($where)' : '';
     String _order = order.isNotEmpty ? ' ORDER BY $order' : '';
-    return db.value!.getAll(sql + defaultWhere + where + _order);
+    return db.value!.getAll(sql + defaultWhere + _where + _order);
   }
-
 
   write({required String tableName, required Map data}) async {
     final database = db.value!;
