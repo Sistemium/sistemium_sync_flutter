@@ -14,8 +14,7 @@ import 'package:sqlite_async/sqlite3_common.dart';
 import 'package:sqlite_async/sqlite_async.dart';
 
 class BackendWrapper extends InheritedWidget {
-  final ValueNotifier<bool> inited = ValueNotifier<bool>(false);
-  final ValueNotifier<SqliteDatabase?> _db = ValueNotifier<SqliteDatabase?>(
+  final ValueNotifier<SqliteDatabase?> db = ValueNotifier<SqliteDatabase?>(
     null,
   );
   final ValueNotifier _sseConnected = ValueNotifier(false);
@@ -52,11 +51,9 @@ class BackendWrapper extends InheritedWidget {
     final SqliteDatabase tempDb = await openDatabase();
     final migrations = abstractPregeneratedMigrations.migrations;
     await migrations.migrate(tempDb);
-    _db.value = tempDb;
+    db.value = tempDb;
     startSyncer();
-    inited.value = true;
     print('Database initialized');
-    print(inited.value);
   }
 
   Future deinitDb() async {
@@ -64,11 +61,10 @@ class BackendWrapper extends InheritedWidget {
     _eventSubscription.value?.cancel();
     _eventSubscription.value = null;
     _sseConnected.value = false;
-    if (_db.value != null) {
-      await _db.value!.close();
+    if (db.value != null) {
+      await db.value!.close();
     }
-    _db.value = null;
-    inited.value = false;
+    db.value = null;
     print('Database deinitialized');
   }
 
@@ -80,7 +76,7 @@ class BackendWrapper extends InheritedWidget {
   }) {
     String defaultWhere = ' where (is_deleted != 1 OR is_deleted IS NULL) ';
     String _order = order.isNotEmpty ? ' ORDER BY $order' : '';
-    return _db.value!.watch(
+    return db.value!.watch(
       sql + defaultWhere + where + _order,
       triggerOnTables: tables,
     );
@@ -93,7 +89,43 @@ class BackendWrapper extends InheritedWidget {
   }) {
     String defaultWhere = ' where (is_deleted != 1 OR is_deleted IS NULL) ';
     String _order = order.isNotEmpty ? ' ORDER BY $order' : '';
-    return _db.value!.getAll(sql + defaultWhere + where + _order);
+    return db.value!.getAll(sql + defaultWhere + where + _order);
+  }
+
+
+  write({required String tableName, required Map data}) async {
+    final database = db.value!;
+    final columns = data.keys.toList();
+    if (data['_id'] == null) {
+      data['_id'] = ObjectId().hexString;
+    }
+    final values = data.values.toList();
+    final placeholders = List.filled(columns.length, '?').join(', ');
+    final updatePlaceholders = columns.map((col) => '$col = ?').join(', ');
+
+    final sql = '''
+      INSERT INTO $tableName (${columns.join(', ')}, is_unsynced)
+      VALUES ($placeholders, 1)
+      ON CONFLICT(_id) DO UPDATE SET
+      $updatePlaceholders, is_unsynced = 1
+    ''';
+
+    await database.execute(sql, [...values, ...values]);
+    fullSync();
+    return;
+  }
+
+  delete({required String tableName, required String id}) async {
+    final primaryKey = '_id';
+    final database = db.value!;
+
+    final sql = '''
+      UPDATE $tableName SET is_unsynced = 1, is_deleted = 1 WHERE $primaryKey = ?
+    ''';
+
+    await database.execute(sql, [id]);
+    fullSync();
+    return;
   }
 
   Future<SqliteDatabase> openDatabase() async {
@@ -151,7 +183,7 @@ class BackendWrapper extends InheritedWidget {
   //todo: sometimes we need to sync only one table, not all
   fullSync() async {
     bool needRepeatFullSync = false;
-    final ResultSet syncingTables = await _db.value!.getAll(
+    final ResultSet syncingTables = await db.value!.getAll(
       'select * from syncing_table',
     );
 
@@ -168,7 +200,7 @@ class BackendWrapper extends InheritedWidget {
           lastReceivedLts: lastReceivedLts,
           pageSize: pageSize,
           onDataReceived: (Map<String, dynamic> response) async {
-            await _db.value!.writeTransaction((tx) async {
+            await db.value!.writeTransaction((tx) async {
               final ResultSet result = await tx.getAll(
                 'select * from ${table['entity_name']} where is_unsynced = 1',
               );
@@ -224,48 +256,11 @@ ON CONFLICT($primaryKey) DO UPDATE SET $updateAssignments;
     }
   }
 
-  write({required String tableName, required Map data}) async {
-    final db = _db.value!;
-    final columns = data.keys.toList();
-    if (!columns.contains('_id')) {
-      if (data['_id'] == null) {
-        data['_id'] = ObjectId().hexString;
-      }
-    }
-    final values = data.values.toList();
-    final placeholders = List.filled(columns.length, '?').join(', ');
-    final updatePlaceholders = columns.map((col) => '$col = ?').join(', ');
-
-    final sql = '''
-      INSERT INTO $tableName (${columns.join(', ')}, is_unsynced)
-      VALUES ($placeholders, 1)
-      ON CONFLICT(_id) DO UPDATE SET
-      $updatePlaceholders, is_unsynced = 1
-    ''';
-
-    await db.execute(sql, [...values, ...values]);
-    fullSync();
-    return;
-  }
-
-  delete({required String tableName, required String id}) async {
-    final primaryKey = '_id';
-    final db = _db.value!;
-
-    final sql = '''
-      UPDATE $tableName SET is_unsynced = 1, is_deleted = 1 WHERE $primaryKey = ?
-    ''';
-
-    await db.execute(sql, [id]);
-    fullSync();
-    return;
-  }
-
   sendUnsynced({required ResultSet syncingTables}) async {
-    SqliteDatabase db = _db.value!;
+    SqliteDatabase database = db.value!;
     bool shouldBreakAndRetry = false;
     for (var table in syncingTables) {
-      final ResultSet result = await db.getAll(
+      final ResultSet result = await database.getAll(
         'select ${abstractMetaEntity.syncableColumns[table['_id']]} from ${table['_id']} where is_unsynced = 1',
       );
       if (result.isEmpty) {
@@ -284,7 +279,7 @@ ON CONFLICT($primaryKey) DO UPDATE SET $updateAssignments;
         shouldBreakAndRetry = true;
         break;
       }
-      await db.writeTransaction((tx) async {
+      await database.writeTransaction((tx) async {
         //todo: not sure if this most efficient way
         final ResultSet result2 = await tx.getAll(
           'select ${abstractMetaEntity.syncableColumns[table['_id']]} from ${table['_id']} where is_unsynced = 1',
