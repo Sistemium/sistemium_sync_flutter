@@ -96,10 +96,10 @@ class BackendWrapper extends InheritedWidget {
 
   write({required String tableName, required Map data}) async {
     final database = db.value!;
-    final columns = data.keys.toList();
     if (data['_id'] == null) {
       data['_id'] = ObjectId().hexString;
     }
+    final columns = data.keys.toList();
     final values = data.values.toList();
     final placeholders = List.filled(columns.length, '?').join(', ');
     final updatePlaceholders = columns.map((col) => '$col = ?').join(', ');
