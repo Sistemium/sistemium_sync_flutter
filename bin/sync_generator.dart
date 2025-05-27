@@ -27,9 +27,10 @@ void main(List<String> args) async {
     }
 
     final List<dynamic> allModels = jsonDecode(response.body);
-    final List<dynamic> appModels = allModels
-        .where((m) => m['app_id'] == targetAppId && m['version'] is int)
-        .toList();
+    final List<dynamic> appModels =
+        allModels
+            .where((m) => m['app_id'] == targetAppId && m['version'] is int)
+            .toList();
     if (appModels.isEmpty) {
       print('Error: No valid models found for app_id "$targetAppId".');
       exit(1);
@@ -60,12 +61,12 @@ void main(List<String> args) async {
       exit(1);
     }
 
-    final List<dynamic> entities = modelDefaults['entities'] is List
-        ? List<dynamic>.from(modelDefaults['entities'])
-        : [];
-    final List<dynamic> syncableEntities = entities
-        .whereType<Map<String, dynamic>>()
-        .toList();
+    final List<dynamic> entities =
+        modelDefaults['entities'] is List
+            ? List<dynamic>.from(modelDefaults['entities'])
+            : [];
+    final List<dynamic> syncableEntities =
+        entities.whereType<Map<String, dynamic>>().toList();
 
     final buffer = StringBuffer();
 
@@ -130,7 +131,9 @@ void main(List<String> args) async {
       if (entityData is! Map<String, dynamic>) continue;
       final tableName = entityData['name'] as String?;
       final fields =
-          entityData['fields'] is List ? List<dynamic>.from(entityData['fields']) : [];
+          entityData['fields'] is List
+              ? List<dynamic>.from(entityData['fields'])
+              : [];
       if (tableName == null || tableName.isEmpty || fields.isEmpty) continue;
 
       final className = capitalize(tableName);
@@ -149,7 +152,8 @@ void main(List<String> args) async {
         if (fieldNameStr == null ||
             fieldNameStr.isEmpty ||
             fieldTypeStr == null ||
-            fieldTypeStr.isEmpty) continue;
+            fieldTypeStr.isEmpty)
+          continue;
 
         final dartType = mapMongoTypeToDart(fieldTypeStr);
         final fieldName = fieldNameStr;
@@ -188,7 +192,8 @@ void main(List<String> args) async {
         if (fieldNameStr == null ||
             fieldNameStr.isEmpty ||
             fieldTypeStr == null ||
-            fieldTypeStr.isEmpty) continue;
+            fieldTypeStr.isEmpty)
+          continue;
 
         final dartType = mapMongoTypeToDart(fieldTypeStr);
         final fieldName = fieldNameStr;
@@ -228,7 +233,8 @@ void main(List<String> args) async {
         if (fieldNameStr == null ||
             fieldNameStr.isEmpty ||
             fieldTypeStr == null ||
-            fieldTypeStr.isEmpty) continue;
+            fieldTypeStr.isEmpty)
+          continue;
 
         final fieldName = fieldNameStr;
         final dartType = mapMongoTypeToDart(fieldTypeStr);
@@ -256,16 +262,21 @@ void main(List<String> args) async {
       if (entityData is! Map<String, dynamic>) continue;
       final tableName = entityData['name'] as String?;
       final fields =
-          entityData['fields'] is List ? List<dynamic>.from(entityData['fields']) : [];
+          entityData['fields'] is List
+              ? List<dynamic>.from(entityData['fields'])
+              : [];
       if (tableName == null || tableName.isEmpty || fields.isEmpty) continue;
 
-      final columnNames = fields
-          .map((f) => f is Map<String, dynamic> ? f['name'] as String? : null)
-          .where(
-            (name) =>
-                name != null && name.isNotEmpty && name != 'is_unsynced',
-          )
-          .toList();
+      final columnNames =
+          fields
+              .map(
+                (f) => f is Map<String, dynamic> ? f['name'] as String? : null,
+              )
+              .where(
+                (name) =>
+                    name != null && name.isNotEmpty && name != 'is_unsynced',
+              )
+              .toList();
       buffer.writeln("    '$tableName': '${columnNames.join(', ')}',");
     }
     buffer.writeln('  };');
@@ -334,8 +345,15 @@ void generateSqlExecutionCode(
 
 String escapeSqlString(String sql) => sql.replaceAll("'''", "'''\"'\"'\"'''");
 
-String capitalize(String s) =>
-    s.split('_').map((part) => part.isEmpty ? '' : part[0].toUpperCase() + part.substring(1).toLowerCase()).join('');
+String capitalize(String s) => s
+    .split('_')
+    .map(
+      (part) =>
+          part.isEmpty
+              ? ''
+              : part[0].toUpperCase() + part.substring(1).toLowerCase(),
+    )
+    .join('');
 
 String mapMongoTypeToDart(String mongoType) {
   final lower = mongoType.toLowerCase();

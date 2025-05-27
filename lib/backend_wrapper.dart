@@ -13,59 +13,42 @@ import 'package:sqlite_async/sqlite3.dart';
 import 'package:sqlite_async/sqlite3_common.dart';
 import 'package:sqlite_async/sqlite_async.dart';
 
-class BackendWrapper extends InheritedWidget {
-  final ValueNotifier<SqliteDatabase?> db = ValueNotifier<SqliteDatabase?>(
-    null,
-  );
-  final ValueNotifier _sseConnected = ValueNotifier(false);
-  final ValueNotifier<StreamSubscription?> _eventSubscription = ValueNotifier(
-    null,
-  );
+class BackendNotifier extends ChangeNotifier {
   final AbstractPregeneratedMigrations abstractPregeneratedMigrations;
   final AbstractSyncConstants abstractSyncConstants;
   final AbstractMetaEntity abstractMetaEntity;
-  late final _serverUrl;
-  late final userId;
 
-  BackendWrapper({
-    super.key,
-    required super.child,
+  SqliteDatabase? _db;
+  bool _sseConnected = false;
+  StreamSubscription? _eventSubscription;
+  String? _serverUrl;
+  String? userId;
+
+  BackendNotifier({
     required this.abstractPregeneratedMigrations,
     required this.abstractSyncConstants,
     required this.abstractMetaEntity,
   });
 
-  static BackendWrapper? maybeOf(BuildContext context) =>
-      context.dependOnInheritedWidgetOfExactType<BackendWrapper>();
+  SqliteDatabase? get db => _db;
 
-  @override
-  bool updateShouldNotify(BackendWrapper oldWidget) => false;
-
-  Future initDb({String? serverUrl, required String userId}) async {
-    if (serverUrl != null) {
-      _serverUrl = serverUrl;
-    } else {
-      _serverUrl = abstractSyncConstants.serverUrl;
-    }
+  Future<void> initDb({String? serverUrl, required String userId}) async {
+    _serverUrl = serverUrl ?? abstractSyncConstants.serverUrl;
     this.userId = userId;
-    final SqliteDatabase tempDb = await openDatabase();
-    final migrations = abstractPregeneratedMigrations.migrations;
-    await migrations.migrate(tempDb);
-    db.value = tempDb;
-    startSyncer();
-    print('Database initialized');
+    final tempDb = await _openDatabase();
+    await abstractPregeneratedMigrations.migrations.migrate(tempDb);
+    _db = tempDb;
+    await _startSyncer();
+    notifyListeners();
   }
 
-  Future deinitDb() async {
-    print('Deinitializing database...');
-    _eventSubscription.value?.cancel();
-    _eventSubscription.value = null;
-    _sseConnected.value = false;
-    if (db.value != null) {
-      await db.value!.close();
-    }
-    db.value = null;
-    print('Database deinitialized');
+  Future<void> deinitDb() async {
+    await _eventSubscription?.cancel();
+    _eventSubscription = null;
+    _sseConnected = false;
+    if (_db != null) await _db!.close();
+    _db = null;
+    notifyListeners();
   }
 
   Stream<List> watch({
@@ -74,10 +57,10 @@ class BackendWrapper extends InheritedWidget {
     String where = '',
     String order = '',
   }) {
-    String defaultWhere = ' where (is_deleted != 1 OR is_deleted IS NULL) ';
-    String _where = where.isNotEmpty ? ' AND ($where)' : '';
-    String _order = order.isNotEmpty ? ' ORDER BY $order' : '';
-    return db.value!.watch(
+    final defaultWhere = ' where (is_deleted != 1 OR is_deleted IS NULL) ';
+    final _where = where.isNotEmpty ? ' AND ($where)' : '';
+    final _order = order.isNotEmpty ? ' ORDER BY $order' : '';
+    return _db!.watch(
       sql + defaultWhere + _where + _order,
       triggerOnTables: tables,
     );
@@ -88,51 +71,40 @@ class BackendWrapper extends InheritedWidget {
     String where = '',
     String order = '',
   }) {
-    String defaultWhere = ' where (is_deleted != 1 OR is_deleted IS NULL) ';
-    String _where = where.isNotEmpty ? ' AND ($where)' : '';
-    String _order = order.isNotEmpty ? ' ORDER BY $order' : '';
-    return db.value!.getAll(sql + defaultWhere + _where + _order);
+    final defaultWhere = ' where (is_deleted != 1 OR is_deleted IS NULL) ';
+    final _where = where.isNotEmpty ? ' AND ($where)' : '';
+    final _order = order.isNotEmpty ? ' ORDER BY $order' : '';
+    return _db!.getAll(sql + defaultWhere + _where + _order);
   }
 
-  write({required String tableName, required Map data}) async {
-    final database = db.value!;
-    if (data['_id'] == null) {
-      data['_id'] = ObjectId().hexString;
-    }
+  Future<void> write({required String tableName, required Map data}) async {
+    if (data['_id'] == null) data['_id'] = ObjectId().hexString;
     final columns = data.keys.toList();
     final values = data.values.toList();
     final placeholders = List.filled(columns.length, '?').join(', ');
-    final updatePlaceholders = columns.map((col) => '$col = ?').join(', ');
-
-    final sql = '''
+    final updatePlaceholders = columns.map((c) => '$c = ?').join(', ');
+    final sql =
+        '''
       INSERT INTO $tableName (${columns.join(', ')}, is_unsynced)
       VALUES ($placeholders, 1)
-      ON CONFLICT(_id) DO UPDATE SET
-      $updatePlaceholders, is_unsynced = 1
+      ON CONFLICT(_id) DO UPDATE SET $updatePlaceholders, is_unsynced = 1
     ''';
-
-    await database.execute(sql, [...values, ...values]);
-    fullSync();
-    return;
+    await _db!.execute(sql, [...values, ...values]);
+    await fullSync();
   }
 
-  delete({required String tableName, required String id}) async {
-    final primaryKey = '_id';
-    final database = db.value!;
-
-    final sql = '''
-      UPDATE $tableName SET is_unsynced = 1, is_deleted = 1 WHERE $primaryKey = ?
-    ''';
-
-    await database.execute(sql, [id]);
-    fullSync();
-    return;
+  Future<void> delete({required String tableName, required String id}) async {
+    await _db!.execute(
+      'UPDATE $tableName SET is_unsynced = 1, is_deleted = 1 WHERE _id = ?',
+      [id],
+    );
+    await fullSync();
   }
 
-  Future<SqliteDatabase> openDatabase() async {
-    final dbPath = await getDatabasePath('$userId/helper_sync.db');
-    final db = SqliteDatabase(
-      path: dbPath,
+  Future<SqliteDatabase> _openDatabase() async {
+    final path = await _getDatabasePath('$userId/helper_sync.db');
+    return SqliteDatabase(
+      path: path,
       options: SqliteOptions(
         webSqliteOptions: WebSqliteOptions(
           wasmUri: 'sqlite3.wasm',
@@ -140,152 +112,129 @@ class BackendWrapper extends InheritedWidget {
         ),
       ),
     );
-    return db;
   }
 
-  Future<String> getDatabasePath(String dbName) async {
-    String basePath = '';
+  Future<String> _getDatabasePath(String name) async {
+    String base = '';
     if (!kIsWeb) {
       final dir = await getApplicationDocumentsDirectory();
-      basePath = dir.path;
+      base = dir.path;
     }
-    final fullPath = p.join(basePath, dbName);
-    final dirPath = p.dirname(fullPath);
-    final dirToCreate = Directory(dirPath);
-    if (!await dirToCreate.exists()) {
-      await dirToCreate.create(recursive: true);
-    }
-    return fullPath;
+    final full = p.join(base, name);
+    final dir = Directory(p.dirname(full));
+    if (!await dir.exists()) await dir.create(recursive: true);
+    return full;
   }
 
-  Future<void> fetchData({
+  Future<void> _fetchData({
     required String name,
     String? lastReceivedLts,
     required int pageSize,
-    required Function(Map<String, dynamic>) onDataReceived,
+    required Future<void> Function(Map<String, dynamic>) onData,
   }) async {
-    final queryParams = {'name': name, 'pageSize': pageSize.toString()};
-    if (lastReceivedLts != null) {
-      queryParams['lts'] = lastReceivedLts;
-    }
-    final uri = Uri.parse(
-      '$_serverUrl/data',
-    ).replace(queryParameters: queryParams);
-    final response = await http.get(uri);
-
-    if (response.statusCode == 200) {
-      final data = jsonDecode(response.body);
-      onDataReceived(data);
+    final q = {'name': name, 'pageSize': pageSize.toString()};
+    if (lastReceivedLts != null) q['lts'] = lastReceivedLts;
+    final uri = Uri.parse('$_serverUrl/data').replace(queryParameters: q);
+    final res = await http.get(uri);
+    if (res.statusCode == 200) {
+      final data = jsonDecode(res.body);
+      await onData(data);
     } else {
       throw Exception('Failed to fetch data');
     }
   }
 
   //todo: sometimes we need to sync only one table, not all
-  fullSync() async {
-    bool needRepeatFullSync = false;
-    final ResultSet syncingTables = await db.value!.getAll(
-      'select * from syncing_table',
-    );
-
-    await sendUnsynced(syncingTables: syncingTables);
-
-    for (var table in syncingTables) {
-      int pageSize = 1000;
-      bool hasMoreData = true;
-      String? lastReceivedLts = table['last_received_lts']?.toString() ?? '';
-
-      while (hasMoreData) {
-        await fetchData(
+  Future<void> fullSync() async {
+    bool repeat = false;
+    final tables = await _db!.getAll('select * from syncing_table');
+    await _sendUnsynced(syncingTables: tables);
+    for (var table in tables) {
+      int page = 1000;
+      bool more = true;
+      String? lts = table['last_received_lts']?.toString() ?? '';
+      while (more && _db != null) {
+        await _fetchData(
           name: table['entity_name'],
-          lastReceivedLts: lastReceivedLts,
-          pageSize: pageSize,
-          onDataReceived: (Map<String, dynamic> response) async {
-            await db.value!.writeTransaction((tx) async {
-              final ResultSet result = await tx.getAll(
+          lastReceivedLts: lts,
+          pageSize: page,
+          onData: (resp) async {
+            await _db!.writeTransaction((tx) async {
+              final unsynced = await tx.getAll(
                 'select * from ${table['entity_name']} where is_unsynced = 1',
               );
-              if (result.isNotEmpty) {
-                hasMoreData = false;
+              if (unsynced.isNotEmpty) {
+                more = false;
                 //todo: might there be infinite loop, perhaps we need to log something to sentry for debug purposes
-                needRepeatFullSync = true;
+                repeat = true;
                 return;
               }
-              if (response['data']?.length > 0 == false) {
-                hasMoreData = false;
+              if ((resp['data']?.length ?? 0) == 0) {
+                more = false;
                 return;
               }
               final name = table['entity_name'];
-              final primaryKey = '_id';
-              final columns = response['data'][0].keys.toList();
-              final placeholders = List.filled(columns.length, '?').join(', ');
-              final columnsToUpdate = columns.where((k) => k != primaryKey);
-              final updateAssignments = columnsToUpdate
-                  .map((k) => "$k = excluded.$k")
+              final pk = '_id';
+              final cols = resp['data'][0].keys.toList();
+              final placeholders = List.filled(cols.length, '?').join(', ');
+              final updates = cols
+                  .where((c) => c != pk)
+                  .map((c) => '$c = excluded.$c')
                   .join(', ');
-              final sql = '''
-INSERT INTO $name (${columns.join(', ')}) VALUES ($placeholders)
-ON CONFLICT($primaryKey) DO UPDATE SET $updateAssignments;
+              final sql =
+                  '''
+INSERT INTO $name (${cols.join(', ')}) VALUES ($placeholders)
+ON CONFLICT($pk) DO UPDATE SET $updates;
 ''';
-              final List<Map<String, dynamic>> data =
-                  List<Map<String, dynamic>>.from(response['data']);
-
-              final List<List<Object?>> batchValues =
-                  data.map<List<Object?>>((Map<String, dynamic> dataItem) {
-                    return columns
-                        .map<Object?>((k) => dataItem[k] as Object?)
-                        .toList();
-                  }).toList();
-              await tx.executeBatch(sql, batchValues);
-
-              if (data.length < pageSize) {
-                hasMoreData = false;
+              final data = List<Map<String, dynamic>>.from(resp['data']);
+              final batch = data
+                  .map<List<Object?>>(
+                    (e) => cols.map<Object?>((c) => e[c]).toList(),
+                  )
+                  .toList();
+              await tx.executeBatch(sql, batch);
+              if (data.length < page) {
+                more = false;
                 await tx.execute(
                   'UPDATE syncing_table SET last_received_lts = ? WHERE entity_name = ?',
-                  [data.last["lts"], name],
+                  [data.last['lts'], name],
                 );
               } else {
-                lastReceivedLts = data.last["lts"];
+                lts = data.last['lts'];
               }
             });
           },
         );
       }
     }
-    if (needRepeatFullSync) {
-      fullSync();
-    }
+    if (repeat) await fullSync();
   }
 
-  sendUnsynced({required ResultSet syncingTables}) async {
-    SqliteDatabase database = db.value!;
-    bool shouldBreakAndRetry = false;
+  Future<void> _sendUnsynced({required ResultSet syncingTables}) async {
+    final db = _db!;
+    bool retry = false;
     for (var table in syncingTables) {
-      final ResultSet result = await database.getAll(
+      final rows = await db.getAll(
         'select ${abstractMetaEntity.syncableColumns[table['_id']]} from ${table['_id']} where is_unsynced = 1',
       );
-      if (result.isEmpty) {
-        continue;
-      }
+      if (rows.isEmpty) continue;
       final uri = Uri.parse('$_serverUrl/data');
-      final response = await http.post(
+      final res = await http.post(
         uri,
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'name': table['_id'], 'data': jsonEncode(result)}),
+        body: jsonEncode({'name': table['_id'], 'data': jsonEncode(rows)}),
       );
-      print('Response: ${response.body}');
-      print('Response Code: ${response.statusCode}');
-      if (response.statusCode != 200) {
+      if (res.statusCode != 200) {
         //todo: not sure, may be infinite loop
-        shouldBreakAndRetry = true;
+        retry = true;
         break;
       }
-      await database.writeTransaction((tx) async {
+      await db.writeTransaction((tx) async {
         //todo: not sure if this most efficient way
-        final ResultSet result2 = await tx.getAll(
+        final rows2 = await tx.getAll(
           'select ${abstractMetaEntity.syncableColumns[table['_id']]} from ${table['_id']} where is_unsynced = 1',
         );
-        if (DeepCollectionEquality().equals(result, result2)) {
+        if (DeepCollectionEquality().equals(rows, rows2)) {
           await tx.execute(
             'delete from ${table['_id']} where is_unsynced = 1 and is_deleted = 1',
           );
@@ -293,64 +242,60 @@ ON CONFLICT($primaryKey) DO UPDATE SET $updateAssignments;
             'update ${table['_id']} set is_unsynced = 0 where is_unsynced = 1',
           );
         } else {
-          shouldBreakAndRetry = true;
+          retry = true;
         }
       });
-      if (shouldBreakAndRetry) {
-        await sendUnsynced(syncingTables: syncingTables);
+      if (retry) {
+        await _sendUnsynced(syncingTables: syncingTables);
         break;
       }
     }
   }
 
-  Future<void> startSyncer() async {
-    if (_sseConnected.value) return;
-
+  Future<void> _startSyncer() async {
+    if (_sseConnected) return;
     final uri = Uri.parse('$_serverUrl/events');
     final client = http.Client();
+    void handleError() {
+      _sseConnected = false;
+      _eventSubscription?.cancel();
+      Future.delayed(const Duration(seconds: 5), _startSyncer);
+    }
 
     try {
-      final request = http.Request('GET', uri)
+      final req = http.Request('GET', uri)
         ..headers['Accept'] = 'text/event-stream';
-      final response = await client.send(request);
-
-      if (response.statusCode == 200) {
-        _sseConnected.value = true;
-        fullSync();
-        _eventSubscription.value = response.stream
+      final res = await client.send(req);
+      if (res.statusCode == 200) {
+        _sseConnected = true;
+        await fullSync();
+        _eventSubscription = res.stream
             .transform(utf8.decoder)
             .transform(const LineSplitter())
             .listen(
-              (event) {
-                if (event.startsWith('data:')) {
-                  final data = jsonDecode(event.substring(5));
-                  print('Data Changed: $data');
-                  //todo: performance improvement, maybe we do not need full here
-                  fullSync();
-                }
+              (e) {
+                //todo: performance improvement, maybe we do not need full here
+                if (e.startsWith('data:')) fullSync();
               },
-              onError: (error) {
-                print("Error in SSE connection: $error");
-                _sseConnected.value = false;
-                _eventSubscription.value?.cancel();
-                Future.delayed(Duration(seconds: 5), startSyncer);
-              },
-              onDone: () {
-                print("SSE connection closed");
-                _sseConnected.value = false;
-                _eventSubscription.value?.cancel();
-                Future.delayed(Duration(seconds: 5), startSyncer);
-              },
+              onError: (_) => handleError(),
+              onDone: handleError,
             );
       } else {
-        print('Failed to connect to SSE: ${response.statusCode}');
-        _sseConnected.value = false;
-        Future.delayed(Duration(seconds: 5), startSyncer);
+        handleError();
       }
-    } catch (e) {
-      print("Error connecting to SSE: $e");
-      _sseConnected.value = false;
-      Future.delayed(Duration(seconds: 5), startSyncer);
+    } catch (_) {
+      handleError();
     }
   }
+}
+
+class BackendWrapper extends InheritedNotifier<BackendNotifier> {
+  const BackendWrapper({
+    Key? key,
+    required BackendNotifier notifier,
+    required Widget child,
+  }) : super(key: key, notifier: notifier, child: child);
+
+  static BackendNotifier? of(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<BackendWrapper>()?.notifier;
 }
