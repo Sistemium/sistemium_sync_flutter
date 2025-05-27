@@ -38,7 +38,7 @@ class BackendNotifier extends ChangeNotifier {
     final tempDb = await _openDatabase();
     await abstractPregeneratedMigrations.migrations.migrate(tempDb);
     _db = tempDb;
-    await _startSyncer();
+    _startSyncer();
     notifyListeners();
   }
 
