@@ -193,12 +193,12 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
                   )
                   .toList();
               await tx.executeBatch(sql, batch);
+              await tx.execute(
+                'UPDATE syncing_table SET last_received_lts = ? WHERE entity_name = ?',
+                [data.last['lts'], name],
+              );
               if (data.length < page) {
                 more = false;
-                await tx.execute(
-                  'UPDATE syncing_table SET last_received_lts = ? WHERE entity_name = ?',
-                  [data.last['lts'], name],
-                );
               } else {
                 lts = data.last['lts'];
               }
