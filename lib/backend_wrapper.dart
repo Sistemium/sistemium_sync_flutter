@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:collection/collection.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:objectid/objectid.dart';
@@ -169,6 +169,11 @@ class BackendNotifier extends ChangeNotifier {
                 repeat = true;
                 return;
               }
+              if (kDebugMode) {
+                print('Syncing ${table['entity_name']}');
+                print('Last received LTS: $lts');
+                print('Received ${resp['data']?.length ?? 0} rows');
+              }
               if ((resp['data']?.length ?? 0) == 0) {
                 more = false;
                 return;
@@ -187,6 +192,9 @@ INSERT INTO $name (${cols.join(', ')}) VALUES ($placeholders)
 ON CONFLICT($pk) DO UPDATE SET $updates;
 ''';
               final data = List<Map<String, dynamic>>.from(resp['data']);
+              if (kDebugMode) {
+                print('Last lts in response: ${data.last['lts']}');
+              }
               final batch = data
                   .map<List<Object?>>(
                     (e) => cols.map<Object?>((c) => e[c]).toList(),
