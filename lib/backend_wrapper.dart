@@ -223,14 +223,19 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
     bool retry = false;
     for (var table in syncingTables) {
       final rows = await db.getAll(
-        'select ${abstractMetaEntity.syncableColumns[table['_id']]} from ${table['_id']} where is_unsynced = 1',
+        'select ${abstractMetaEntity.syncableColumns[table['entity_name']]} from ${table['entity_name']} where is_unsynced = 1',
       );
       if (rows.isEmpty) continue;
       final uri = Uri.parse('$_serverUrl/data');
       final res = await http.post(
         uri,
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'name': table['_id'], 'data': jsonEncode(rows)}),
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({
+          'name': table['entity_name'],
+          'data': jsonEncode(rows),
+        }),
       );
       if (res.statusCode != 200) {
         //todo: not sure, may be infinite loop
@@ -240,14 +245,14 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
       await db.writeTransaction((tx) async {
         //todo: not sure if this most efficient way
         final rows2 = await tx.getAll(
-          'select ${abstractMetaEntity.syncableColumns[table['_id']]} from ${table['_id']} where is_unsynced = 1',
+          'select ${abstractMetaEntity.syncableColumns[table['entity_name']]} from ${table['entity_name']} where is_unsynced = 1',
         );
         if (DeepCollectionEquality().equals(rows, rows2)) {
           await tx.execute(
-            'delete from ${table['_id']} where is_unsynced = 1 and is_deleted = 1',
+            'delete from ${table['entity_name']} where is_unsynced = 1 and is_deleted = 1',
           );
           await tx.execute(
-            'update ${table['_id']} set is_unsynced = 0 where is_unsynced = 1',
+            'update ${table['entity_name']} set is_unsynced = 0 where is_unsynced = 1',
           );
         } else {
           retry = true;
@@ -271,9 +276,9 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
     }
 
     try {
-      final req = http.Request('GET', uri)
+      final request = http.Request('GET', uri)
         ..headers['Accept'] = 'text/event-stream';
-      final res = await client.send(req);
+      final res = await client.send(request);
       if (res.statusCode == 200) {
         _sseConnected = true;
         await fullSync();
@@ -285,13 +290,20 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
                 //todo: performance improvement, maybe we do not need full here
                 if (e.startsWith('data:')) fullSync();
               },
-              onError: (_) => handleError(),
-              onDone: handleError,
+              onError: (e) {
+                if (kDebugMode) {
+                  print('SSE error: $e');
+                  handleError();
+                }
+              },
             );
       } else {
         handleError();
       }
-    } catch (_) {
+    } catch (e) {
+      if (kDebugMode) {
+        print('Error starting SSE: $e');
+      }
       handleError();
     }
   }
