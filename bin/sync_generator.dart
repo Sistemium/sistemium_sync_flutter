@@ -257,7 +257,7 @@ void main(List<String> args) async {
 
     buffer.writeln('class MetaEntity extends AbstractMetaEntity {');
     buffer.writeln('  @override');
-    buffer.writeln('  final Map<String, String> syncableColumns = {');
+    buffer.writeln('  final Map<String, String> syncableColumnsString = {');
     for (final entityData in syncableEntities) {
       if (entityData is! Map<String, dynamic>) continue;
       final tableName = entityData['name'] as String?;
@@ -278,6 +278,30 @@ void main(List<String> args) async {
               )
               .toList();
       buffer.writeln("    '$tableName': '${columnNames.join(', ')}',");
+    }
+    buffer.writeln('  };');
+    buffer.writeln('  @override');
+    buffer.writeln('  final Map<String, List> syncableColumnsList = {');
+    for (final entityData in syncableEntities) {
+      if (entityData is! Map<String, dynamic>) continue;
+      final tableName = entityData['name'] as String?;
+      final fields =
+          entityData['fields'] is List
+              ? List<dynamic>.from(entityData['fields'])
+              : [];
+      if (tableName == null || tableName.isEmpty || fields.isEmpty) continue;
+
+      final columnNames =
+          fields
+              .map(
+                (f) => f is Map<String, dynamic> ? f['name'] as String? : null,
+              )
+              .where(
+                (name) =>
+                    name != null && name.isNotEmpty && name != 'is_unsynced',
+              )
+              .toList();
+      buffer.writeln("    '$tableName': ${jsonEncode(columnNames)},");
     }
     buffer.writeln('  };');
     buffer.writeln('}');

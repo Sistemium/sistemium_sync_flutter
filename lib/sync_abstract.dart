@@ -10,5 +10,6 @@ abstract class AbstractPregeneratedMigrations {
 }
 
 abstract class AbstractMetaEntity {
-  Map<String, String> get syncableColumns;
+  Map<String, String> get syncableColumnsString;
+  Map<String, List> get syncableColumnsList;
 }
