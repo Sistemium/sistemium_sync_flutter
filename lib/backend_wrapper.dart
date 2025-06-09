@@ -151,6 +151,7 @@ class BackendNotifier extends ChangeNotifier {
   Future<void> fullSync() async {
     if (fullSyncStarted) {
       repeat = true;
+      return;
     }
     fullSyncStarted = true;
     try {
