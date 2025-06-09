@@ -102,7 +102,7 @@ class BackendNotifier extends ChangeNotifier {
   }
 
   Future<SqliteDatabase> _openDatabase() async {
-    final path = await _getDatabasePath('$userId/helper_sync.db');
+    final path = await _getDatabasePath('$userId/sync.db');
     return SqliteDatabase(
       path: path,
       options: SqliteOptions(
