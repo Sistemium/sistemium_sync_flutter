@@ -77,7 +77,12 @@ class BackendNotifier extends ChangeNotifier {
     return _db!.getAll(sql + defaultWhere + _where + _order);
   }
 
-  Future<void> write({required String tableName, required Map data}) async {
+  Future<void> write({
+    required String tableName,
+    required Map data,
+    SqliteWriteContext? tx,
+  }) async {
+    final db = tx ?? _db;
     if (data['_id'] == null) data['_id'] = ObjectId().hexString;
     final columns = data.keys.toList();
     final values = data.values.toList();
@@ -89,8 +94,10 @@ class BackendNotifier extends ChangeNotifier {
       VALUES ($placeholders, 1)
       ON CONFLICT(_id) DO UPDATE SET $updatePlaceholders, is_unsynced = 1
     ''';
-    await _db!.execute(sql, [...values, ...values]);
-    await fullSync();
+    await db!.execute(sql, [...values, ...values]);
+    if (tx == null) {
+      fullSync();
+    }
   }
 
   Future<void> delete({required String tableName, required String id}) async {
