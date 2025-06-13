@@ -3,13 +3,14 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 
 void main(List<String> args) async {
-  if (args.length != 2) {
-    print('Usage: dart sync_generator.dart <server_url> <app_id>');
+  if (args.length < 2 || args.length > 3) {
+    print('Usage: dart sync_generator.dart <server_url> <app_id> [auth_token]');
     exit(1);
   }
 
   String serverUrl = args[0];
   final targetAppId = args[1];
+  final authToken = args.length == 3 ? args[2] : null;
   final outputFilePath = 'pregenerated.dart';
 
   if (serverUrl.endsWith('/')) {
@@ -19,7 +20,10 @@ void main(List<String> args) async {
   final constantsServerUrl = args[0];
 
   try {
-    final response = await http.get(modelsUrl);
+    final response = await http.get(
+      modelsUrl,
+      headers: authToken != null ? {'Authorization': authToken} : null,
+    );
     if (response.statusCode != 200) {
       print('Error fetching data from $modelsUrl: ${response.statusCode}');
       print('Response body: ${response.body}');
