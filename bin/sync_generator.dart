@@ -20,6 +20,8 @@ void main(List<String> args) async {
   final constantsServerUrl = args[0];
 
   try {
+    print(modelsUrl);
+    print(authToken != null ? {'Authorization': authToken} : null);
     final response = await http.get(
       modelsUrl,
       headers: authToken != null ? {'Authorization': authToken} : null,
@@ -31,10 +33,9 @@ void main(List<String> args) async {
     }
 
     final List<dynamic> allModels = jsonDecode(response.body);
-    final List<dynamic> appModels =
-        allModels
-            .where((m) => m['app_id'] == targetAppId && m['version'] is int)
-            .toList();
+    final List<dynamic> appModels = allModels
+        .where((m) => m['app_id'] == targetAppId && m['version'] is int)
+        .toList();
     if (appModels.isEmpty) {
       print('Error: No valid models found for app_id "$targetAppId".');
       exit(1);
@@ -48,8 +49,8 @@ void main(List<String> args) async {
 
     final List<dynamic> latestClientCreateDdls =
         latestModel['client_create'] is List
-            ? List<dynamic>.from(latestModel['client_create'])
-            : [];
+        ? List<dynamic>.from(latestModel['client_create'])
+        : [];
     if (latestClientCreateDdls.isEmpty) {
       print(
         'Error: client_create is null or empty for the latest version ($latestVersion) of app_id "$targetAppId".',
@@ -65,12 +66,12 @@ void main(List<String> args) async {
       exit(1);
     }
 
-    final List<dynamic> entities =
-        modelDefaults['entities'] is List
-            ? List<dynamic>.from(modelDefaults['entities'])
-            : [];
-    final List<dynamic> syncableEntities =
-        entities.whereType<Map<String, dynamic>>().toList();
+    final List<dynamic> entities = modelDefaults['entities'] is List
+        ? List<dynamic>.from(modelDefaults['entities'])
+        : [];
+    final List<dynamic> syncableEntities = entities
+        .whereType<Map<String, dynamic>>()
+        .toList();
 
     final buffer = StringBuffer();
 
@@ -99,8 +100,8 @@ void main(List<String> args) async {
       final int currentVersion = modelData['version'];
       final List<dynamic> clientMigrationDdls =
           modelData['client_migration'] is List
-              ? List<dynamic>.from(modelData['client_migration'])
-              : [];
+          ? List<dynamic>.from(modelData['client_migration'])
+          : [];
       buffer.writeln('    ..add(SqliteMigration(');
       buffer.writeln('      $currentVersion,');
       buffer.writeln('      (tx) async {');
@@ -134,10 +135,9 @@ void main(List<String> args) async {
     for (final entityData in entities) {
       if (entityData is! Map<String, dynamic>) continue;
       final tableName = entityData['name'] as String?;
-      final fields =
-          entityData['fields'] is List
-              ? List<dynamic>.from(entityData['fields'])
-              : [];
+      final fields = entityData['fields'] is List
+          ? List<dynamic>.from(entityData['fields'])
+          : [];
       if (tableName == null || tableName.isEmpty || fields.isEmpty) continue;
 
       final className = capitalize(tableName);
@@ -265,22 +265,17 @@ void main(List<String> args) async {
     for (final entityData in syncableEntities) {
       if (entityData is! Map<String, dynamic>) continue;
       final tableName = entityData['name'] as String?;
-      final fields =
-          entityData['fields'] is List
-              ? List<dynamic>.from(entityData['fields'])
-              : [];
+      final fields = entityData['fields'] is List
+          ? List<dynamic>.from(entityData['fields'])
+          : [];
       if (tableName == null || tableName.isEmpty || fields.isEmpty) continue;
 
-      final columnNames =
-          fields
-              .map(
-                (f) => f is Map<String, dynamic> ? f['name'] as String? : null,
-              )
-              .where(
-                (name) =>
-                    name != null && name.isNotEmpty && name != 'is_unsynced',
-              )
-              .toList();
+      final columnNames = fields
+          .map((f) => f is Map<String, dynamic> ? f['name'] as String? : null)
+          .where(
+            (name) => name != null && name.isNotEmpty && name != 'is_unsynced',
+          )
+          .toList();
       buffer.writeln("    '$tableName': '${columnNames.join(', ')}',");
     }
     buffer.writeln('  };');
@@ -289,22 +284,17 @@ void main(List<String> args) async {
     for (final entityData in syncableEntities) {
       if (entityData is! Map<String, dynamic>) continue;
       final tableName = entityData['name'] as String?;
-      final fields =
-          entityData['fields'] is List
-              ? List<dynamic>.from(entityData['fields'])
-              : [];
+      final fields = entityData['fields'] is List
+          ? List<dynamic>.from(entityData['fields'])
+          : [];
       if (tableName == null || tableName.isEmpty || fields.isEmpty) continue;
 
-      final columnNames =
-          fields
-              .map(
-                (f) => f is Map<String, dynamic> ? f['name'] as String? : null,
-              )
-              .where(
-                (name) =>
-                    name != null && name.isNotEmpty && name != 'is_unsynced',
-              )
-              .toList();
+      final columnNames = fields
+          .map((f) => f is Map<String, dynamic> ? f['name'] as String? : null)
+          .where(
+            (name) => name != null && name.isNotEmpty && name != 'is_unsynced',
+          )
+          .toList();
       buffer.writeln("    '$tableName': ${jsonEncode(columnNames)},");
     }
     buffer.writeln('  };');
@@ -376,10 +366,9 @@ String escapeSqlString(String sql) => sql.replaceAll("'''", "'''\"'\"'\"'''");
 String capitalize(String s) => s
     .split('_')
     .map(
-      (part) =>
-          part.isEmpty
-              ? ''
-              : part[0].toUpperCase() + part.substring(1).toLowerCase(),
+      (part) => part.isEmpty
+          ? ''
+          : part[0].toUpperCase() + part.substring(1).toLowerCase(),
     )
     .join('');
 
