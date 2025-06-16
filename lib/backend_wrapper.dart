@@ -142,7 +142,12 @@ class BackendNotifier extends ChangeNotifier {
     final q = {'name': name, 'pageSize': pageSize.toString()};
     if (lastReceivedLts != null) q['lts'] = lastReceivedLts;
     final uri = Uri.parse('$_serverUrl/data').replace(queryParameters: q);
-    final res = await http.get(uri);
+    final res = await http.get(
+      uri,
+      headers: {
+        'appid': abstractSyncConstants.appId,
+      },
+    );
     if (res.statusCode == 200) {
       final data = jsonDecode(res.body);
       await onData(data);
@@ -257,7 +262,10 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
       final uri = Uri.parse('$_serverUrl/data');
       final res = await http.post(
         uri,
-        headers: {'Content-Type': 'application/json'},
+        headers: {
+          'Content-Type': 'application/json',
+          'appid': abstractSyncConstants.appId,
+        },
         body: jsonEncode({
           'name': table['entity_name'],
           'data': jsonEncode(rows),
@@ -303,7 +311,8 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
 
     try {
       final request = http.Request('GET', uri)
-        ..headers['Accept'] = 'text/event-stream';
+        ..headers['Accept'] = 'text/event-stream'
+        ..headers['appid'] = abstractSyncConstants.appId;
       final res = await client.send(request);
       if (res.statusCode == 200) {
         _sseConnected = true;

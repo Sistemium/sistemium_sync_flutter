@@ -22,9 +22,12 @@ void main(List<String> args) async {
   try {
     print(modelsUrl);
     print(authToken != null ? {'Authorization': authToken} : null);
+    final headers = <String, String>{'appid': targetAppId};
+    if (authToken != null) headers['Authorization'] = authToken;
+
     final response = await http.get(
       modelsUrl,
-      headers: authToken != null ? {'Authorization': authToken} : null,
+      headers: headers,
     );
     if (response.statusCode != 200) {
       print('Error fetching data from $modelsUrl: ${response.statusCode}');
