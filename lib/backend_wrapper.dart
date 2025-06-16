@@ -23,6 +23,7 @@ class BackendNotifier extends ChangeNotifier {
   StreamSubscription? _eventSubscription;
   String? _serverUrl;
   String? userId;
+  String? _authToken;
 
   BackendNotifier({
     required this.abstractPregeneratedMigrations,
@@ -32,9 +33,14 @@ class BackendNotifier extends ChangeNotifier {
 
   SqliteDatabase? get db => _db;
 
-  Future<void> initDb({String? serverUrl, required String userId}) async {
+  Future<void> initDb({
+    String? serverUrl,
+    required String userId,
+    String? authToken,
+  }) async {
     _serverUrl = serverUrl ?? abstractSyncConstants.serverUrl;
     this.userId = userId;
+    _authToken = authToken;
     final tempDb = await _openDatabase();
     await abstractPregeneratedMigrations.migrations.migrate(tempDb);
     _db = tempDb;
@@ -142,11 +148,16 @@ class BackendNotifier extends ChangeNotifier {
     final q = {'name': name, 'pageSize': pageSize.toString()};
     if (lastReceivedLts != null) q['lts'] = lastReceivedLts;
     final uri = Uri.parse('$_serverUrl/data').replace(queryParameters: q);
+    final headers = {
+      'appid': abstractSyncConstants.appId,
+    };
+    if (_authToken != null) {
+      headers['authorization'] = _authToken!;
+    }
+
     final res = await http.get(
       uri,
-      headers: {
-        'appid': abstractSyncConstants.appId,
-      },
+      headers: headers,
     );
     if (res.statusCode == 200) {
       final data = jsonDecode(res.body);
@@ -260,12 +271,17 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
       );
       if (rows.isEmpty) continue;
       final uri = Uri.parse('$_serverUrl/data');
+      final headers = {
+        'Content-Type': 'application/json',
+        'appid': abstractSyncConstants.appId,
+      };
+      if (_authToken != null) {
+        headers['authorization'] = _authToken!;
+      }
+
       final res = await http.post(
         uri,
-        headers: {
-          'Content-Type': 'application/json',
-          'appid': abstractSyncConstants.appId,
-        },
+        headers: headers,
         body: jsonEncode({
           'name': table['entity_name'],
           'data': jsonEncode(rows),
@@ -313,6 +329,9 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
       final request = http.Request('GET', uri)
         ..headers['Accept'] = 'text/event-stream'
         ..headers['appid'] = abstractSyncConstants.appId;
+      if (_authToken != null) {
+        request.headers['authorization'] = _authToken!;
+      }
       final res = await client.send(request);
       if (res.statusCode == 200) {
         _sseConnected = true;
