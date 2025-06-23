@@ -338,6 +338,80 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
       repeat = false;
       await fullSync();
     }
+
+    // After regular sync flow, process any RulesBoard instructions.
+    await _processRulesBoard();
+  }
+
+  // -----------------------------------------------------------------------
+  // RulesBoard handling
+  // -----------------------------------------------------------------------
+
+  Future<void> _processRulesBoard() async {
+    // Ensure DB is available
+    final dbLocal = _db;
+    if (dbLocal == null) return;
+
+    bool needRepeat = false;
+
+    await dbLocal.writeTransaction((tx) async {
+      // 1. Early exit if any unsynced data exists
+      final unsyncedAny = await tx.getAll(
+        'select entity_name from syncing_table',
+      ).then((tables) async {
+        for (var t in tables) {
+          final rows = await tx.getAll(
+              'select 1 from ${t['entity_name']} where is_unsynced = 1 limit 1');
+          if (rows.isNotEmpty) return true;
+        }
+        return false;
+      });
+
+      if (unsyncedAny) {
+        needRepeat = true;
+        return; // abort processing rules
+      }
+
+      // 2. Fetch RulesBoard entries (ascending by lts)
+      final rulesEntries = await tx.getAll('select * from RulesBoard order by lts asc');
+      if (rulesEntries.isEmpty) return; // nothing to process
+
+      // 3. For each entry, parse list of tables and reset them
+      for (var entry in rulesEntries) {
+        final jsonStr = entry['fullResyncCollections'];
+        if (jsonStr == null) continue;
+        List<dynamic> list;
+        try {
+          list = jsonDecode(jsonStr);
+        } catch (_) {
+          continue; // skip malformed
+        }
+        for (var tbl in list) {
+          if (tbl is! String) continue;
+          // Truncate table
+          await tx.execute('delete from "$tbl"');
+          // Reset lts in syncing_table
+          await tx.execute(
+            'update syncing_table set last_received_lts = NULL where entity_name = ?',
+            [tbl],
+          );
+        }
+      }
+
+      // 4. Capture latest lts and clear RulesBoard
+      final lastLts = rulesEntries.last['lts'];
+      await tx.execute('delete from RulesBoard');
+      await tx.execute(
+        'update syncing_table set last_received_lts = ? where entity_name = ?',
+        [lastLts, 'RulesBoard'],
+      );
+
+      needRepeat = true; // after processing, run another full sync
+    });
+
+    if (needRepeat) {
+      await fullSync();
+    }
   }
 
   Future<void> _sendUnsynced({required ResultSet syncingTables}) async {
