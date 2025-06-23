@@ -25,6 +25,9 @@ class BackendNotifier extends ChangeNotifier {
   String? userId;
   String? _authToken;
 
+  Timer? _rulesBoardRetryTimer;
+  bool _rulesBoardSetupComplete = false;
+
   BackendNotifier({
     required this.abstractPregeneratedMigrations,
     required this.abstractSyncConstants,
@@ -43,6 +46,10 @@ class BackendNotifier extends ChangeNotifier {
     _authToken = authToken;
     final tempDb = await _openDatabase();
     await abstractPregeneratedMigrations.migrations.migrate(tempDb);
+
+    // Ensure RulesBoard row inside syncing_table before exposing DB
+    await _ensureRulesBoardRegistration(tempDb);
+
     _db = tempDb;
     _startSyncer();
     notifyListeners();
@@ -52,9 +59,80 @@ class BackendNotifier extends ChangeNotifier {
     await _eventSubscription?.cancel();
     _eventSubscription = null;
     _sseConnected = false;
+
+    _rulesBoardRetryTimer?.cancel();
+    _rulesBoardRetryTimer = null;
+
     if (_db != null) await _db!.close();
     _db = null;
     notifyListeners();
+  }
+
+  // -----------------------------------------------------------------------
+  // RulesBoard syncing_table bootstrap
+  // -----------------------------------------------------------------------
+
+  Future<void> _ensureRulesBoardRegistration(SqliteDatabase db) async {
+    if (_rulesBoardSetupComplete) return;
+
+    try {
+      final existing = await db.getAll(
+        'SELECT 1 FROM syncing_table WHERE entity_name = ? LIMIT 1',
+        ['RulesBoard'],
+      );
+      if (existing.isNotEmpty) {
+        _rulesBoardSetupComplete = true;
+        return;
+      }
+
+      final latestLts = await _requestLatestRulesBoardLts();
+
+      if (latestLts == null) {
+        _scheduleRulesBoardRetry(db);
+        return;
+      }
+
+      await db.execute(
+        'INSERT INTO syncing_table (_id, entity_name, last_received_lts) VALUES (?, ?, ?)',
+        ['RulesBoard', 'RulesBoard', latestLts],
+      );
+      _rulesBoardSetupComplete = true;
+    } catch (e, st) {
+      if (kDebugMode) {
+        print('Error ensuring RulesBoard registration: $e');
+        print(st);
+      }
+      _scheduleRulesBoardRetry(db);
+    }
+  }
+
+  Future<String?> _requestLatestRulesBoardLts() async {
+    if (_serverUrl == null) return null;
+    try {
+      final uri = Uri.parse('$_serverUrl/rules-lts');
+      final headers = {
+        'appid': abstractSyncConstants.appId,
+      };
+      if (_authToken != null) {
+        headers['authorization'] = _authToken!;
+      }
+
+      final res = await http.get(uri, headers: headers);
+      if (res.statusCode == 200) {
+        final body = jsonDecode(res.body);
+        return body['lts'] as String?;
+      }
+    } catch (e) {
+      if (kDebugMode) print('RulesBoard LTS request failed: $e');
+    }
+    return null;
+  }
+
+  void _scheduleRulesBoardRetry(SqliteDatabase db) {
+    _rulesBoardRetryTimer?.cancel();
+    _rulesBoardRetryTimer = Timer(const Duration(seconds: 30), () async {
+      await _ensureRulesBoardRegistration(db);
+    });
   }
 
   Stream<List> watch({
