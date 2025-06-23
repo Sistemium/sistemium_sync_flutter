@@ -94,7 +94,7 @@ class BackendNotifier extends ChangeNotifier {
 
       await db.execute(
         'INSERT INTO syncing_table (_id, entity_name, last_received_lts) VALUES (?, ?, ?)',
-        ['RulesBoard', 'RulesBoard', latestLts],
+        [ObjectId().hexString, 'RulesBoard', latestLts],
       );
       _rulesBoardSetupComplete = true;
     } catch (e, st) {
