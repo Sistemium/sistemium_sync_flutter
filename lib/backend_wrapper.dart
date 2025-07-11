@@ -352,6 +352,10 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
     final dbLocal = _db;
     if (dbLocal == null) return;
 
+    if (kDebugMode) {
+      print('[RulesBoard] Starting processing...');
+    }
+
     bool needRepeat = false;
 
     await dbLocal.writeTransaction((tx) async {
@@ -368,16 +372,25 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
       });
 
       if (unsyncedAny) {
+        if (kDebugMode) {
+          print('[RulesBoard] Unsynced data exists, aborting.');
+        }
         needRepeat = true;
         return; // abort processing rules
       }
 
       // 2. Fetch RulesBoard entries (ascending by lts)
       final rulesEntries = await tx.getAll('select * from RulesBoard order by lts asc');
+      if (kDebugMode) {
+        print('[RulesBoard] Found ${rulesEntries.length} entries.');
+      }
       if (rulesEntries.isEmpty) return; // nothing to process
 
       // 3. For each entry, parse list of tables and reset them
       for (var entry in rulesEntries) {
+        if (kDebugMode) {
+          print('[RulesBoard] Processing entry: $entry');
+        }
         final jsonStr = entry['fullResyncCollections'];
         if (jsonStr == null) continue;
         List<dynamic> list;
@@ -388,6 +401,9 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
         }
         for (var tbl in list) {
           if (tbl is! String) continue;
+          if (kDebugMode) {
+            print('[RulesBoard] Truncating table: $tbl');
+          }
           // Truncate table
           await tx.execute('delete from "$tbl"');
           // Reset lts in syncing_table
@@ -400,6 +416,10 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
 
       // 4. Capture latest lts and clear RulesBoard
       final lastLts = rulesEntries.last['lts'];
+      if (kDebugMode) {
+        print('[RulesBoard] Clearing local RulesBoard table.');
+        print('[RulesBoard] Setting last_received_lts for RulesBoard to: $lastLts');
+      }
       await tx.execute('delete from RulesBoard');
       await tx.execute(
         'update syncing_table set last_received_lts = ? where entity_name = ?',
@@ -410,6 +430,9 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
     });
 
     if (needRepeat) {
+      if (kDebugMode) {
+        print('[RulesBoard] Processing complete, triggering another sync.');
+      }
       await fullSync();
     }
   }
