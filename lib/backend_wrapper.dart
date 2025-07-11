@@ -405,7 +405,9 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
             print('[RulesBoard] Truncating table: $tbl');
           }
           // Truncate table
-          await tx.execute('delete from "$tbl"');
+          // TODO: This is a workaround for a bug in sqlite_async <= 0.11.7 where
+          // a DELETE statement without a WHERE clause does not trigger the watch stream.
+          await tx.execute('delete from "$tbl" where 1=1');
           // Reset lts in syncing_table
           await tx.execute(
             'update syncing_table set last_received_lts = NULL where entity_name = ?',
