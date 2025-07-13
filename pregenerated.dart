@@ -14,155 +14,7 @@ class PregeneratedMigrations extends AbstractPregeneratedMigrations {
   @override
   final SqliteMigrations migrations = SqliteMigrations()
     ..add(SqliteMigration(
-      1,
-      (tx) async {
-        await tx.execute(r'''CREATE TABLE "ServiceTask" (
-  "_id" TEXT PRIMARY KEY,
-  "lts" INTEGER,
-  "is_deleted" INTEGER,
-  "is_unsynced" INTEGER,
-  "id" TEXT,
-  "assigneeId" TEXT,
-  "cts" INTEGER,
-  "date" INTEGER,
-  "description" TEXT,
-  "processing" TEXT,
-  "servicePointId" TEXT,
-  "siteId" TEXT,
-  "services" TEXT
-);''');
-        await tx.execute(r'''CREATE TABLE "Settings" (
-  "_id" TEXT PRIMARY KEY,
-  "lts" INTEGER,
-  "is_deleted" INTEGER,
-  "is_unsynced" INTEGER,
-  "userId" TEXT UNIQUE,
-  "sortingOption" TEXT,
-  "showCompleteTasks" INTEGER,
-  "selectedDate" INTEGER,
-  "selectedWarehouseMode" TEXT,
-  "filterMasterId" TEXT,
-  "filterSiteId" TEXT,
-  "preferredNavigationApp" TEXT
-);''');
-        await tx.execute(r'''CREATE TABLE "Employee" (
-  "_id" TEXT PRIMARY KEY,
-  "lts" INTEGER,
-  "is_deleted" INTEGER,
-  "is_unsynced" INTEGER,
-  "id" TEXT,
-  "name" TEXT,
-  "siteId" TEXT,
-  "personId" TEXT
-);''');
-        await tx.execute(r'''CREATE TABLE "Site" (
-  "_id" TEXT PRIMARY KEY,
-  "lts" INTEGER,
-  "is_deleted" INTEGER,
-  "is_unsynced" INTEGER,
-  "id" TEXT,
-  "code" TEXT,
-  "name" TEXT
-);''');
-        await tx.execute(r'''CREATE TABLE "Person" (
-  "_id" TEXT PRIMARY KEY,
-  "lts" INTEGER,
-  "is_deleted" INTEGER,
-  "is_unsynced" INTEGER,
-  "id" TEXT,
-  "firstName" TEXT,
-  "lastName" TEXT
-);''');
-        await tx.execute(r'''CREATE TABLE "syncing_table" (
-  "_id" TEXT PRIMARY KEY,
-  "entity_name" TEXT,
-  "last_received_lts" INTEGER
-);''');
-        await tx.executeBatch(r'''INSERT INTO "syncing_table" (_id, entity_name) VALUES(?,?) ON CONFLICT(_id) DO NOTHING;''', [["ServiceTask","ServiceTask"],["Employee","Employee"],["Site","Site"],["Person","Person"]]);
-      },
-    ))
-    ..add(SqliteMigration(
-      2,
-      (tx) async {
-        await tx.execute(r'''CREATE TABLE "LegalEntity" (
-  "_id" TEXT PRIMARY KEY,
-  "lts" TIMESTAMP,
-  "is_deleted" INTEGER,
-  "is_unsynced" INTEGER,
-  "id" TEXT,
-  "name" TEXT
-);''');
-        await tx.execute(r'''CREATE TABLE "ServicePoint" (
-  "_id" TEXT PRIMARY KEY,
-  "lts" TIMESTAMP,
-  "is_deleted" INTEGER,
-  "is_unsynced" INTEGER,
-  "id" TEXT,
-  "address" TEXT
-);''');
-        await tx.executeBatch(r'''INSERT INTO "syncing_table" (_id, entity_name) VALUES(?,?) ON CONFLICT(_id) DO NOTHING;''', [["LegalEntity","LegalEntity"],["ServicePoint","ServicePoint"]]);
-      },
-    ))
-    ..add(SqliteMigration(
-      3,
-      (tx) async {
-        await tx.execute(r'''CREATE TABLE "ServiceContract" (
-  "_id" TEXT PRIMARY KEY,
-  "lts" TIMESTAMP,
-  "is_deleted" INTEGER,
-  "is_unsynced" INTEGER,
-  "id" TEXT,
-  "customerPersonId" TEXT,
-  "customerLegalEntityId" TEXT
-);''');
-        await tx.executeBatch(r'''INSERT INTO "syncing_table" (_id, entity_name) VALUES(?,?) ON CONFLICT(_id) DO NOTHING;''', [["ServiceContract","ServiceContract"]]);
-      },
-    ))
-    ..add(SqliteMigration(
-      4,
-      (tx) async {
-        await tx.execute(r'''ALTER TABLE "ServicePoint" ADD COLUMN "currentServiceContractId" TEXT;''');
-      },
-    ))
-    ..add(SqliteMigration(
-      5,
-      (tx) async {
-        await tx.execute(r'''CREATE TABLE "ServiceTaskHistory" (
-  "_id" TEXT PRIMARY KEY,
-  "lts" TIMESTAMP,
-  "is_deleted" INTEGER,
-  "is_unsynced" INTEGER,
-  "id" TEXT,
-  "assigneeId" TEXT,
-  "authId" TEXT,
-  "comment" TEXT,
-  "cts" INTEGER,
-  "processing" TEXT,
-  "serviceTaskId" TEXT,
-  "timestamp" INTEGER,
-  "type" TEXT
-);''');
-        await tx.executeBatch(r'''INSERT INTO "syncing_table" (_id, entity_name) VALUES(?,?) ON CONFLICT(_id) DO NOTHING;''', [["ServiceTaskHistory","ServiceTaskHistory"]]);
-      },
-    ))
-    ..add(SqliteMigration(
-      6,
-      (tx) async {
-        await tx.execute(r'''CREATE TABLE "User" (
-  "_id" TEXT PRIMARY KEY,
-  "lts" TIMESTAMP,
-  "is_deleted" INTEGER,
-  "is_unsynced" INTEGER,
-  "id" TEXT,
-  "email" TEXT,
-  "name" TEXT,
-  "phone" TEXT
-);''');
-        await tx.executeBatch(r'''INSERT INTO "syncing_table" (_id, entity_name) VALUES(?,?) ON CONFLICT(_id) DO NOTHING;''', [["User","User"]]);
-      },
-    ))
-    ..createDatabase = SqliteMigration(
-      6,
+      12,
       (tx) async {
         await tx.execute(r'''CREATE TABLE "ServiceTask" (
   "_id" TEXT PRIMARY KEY,
@@ -270,14 +122,153 @@ class PregeneratedMigrations extends AbstractPregeneratedMigrations {
   "id" TEXT,
   "email" TEXT,
   "name" TEXT,
-  "phone" TEXT
+  "phone" TEXT,
+  "isAdmin" INTEGER
+);''');
+        await tx.execute(r'''CREATE TABLE "RulesBoard" (
+  "_id" TEXT PRIMARY KEY,
+  "lts" TIMESTAMP,
+  "is_deleted" INTEGER,
+  "is_unsynced" INTEGER,
+  "userId" TEXT,
+  "cts" INTEGER,
+  "fullResyncCollections" TEXT
 );''');
         await tx.execute(r'''CREATE TABLE "syncing_table" (
   "_id" TEXT PRIMARY KEY,
   "entity_name" TEXT,
   "last_received_lts" TIMESTAMP
 );''');
-        await tx.executeBatch(r'''INSERT INTO "syncing_table" (_id, entity_name) VALUES(?, ?) ON CONFLICT(_id) DO NOTHING;''', [["ServiceTask","ServiceTask"],["Employee","Employee"],["Site","Site"],["Person","Person"],["LegalEntity","LegalEntity"],["ServicePoint","ServicePoint"],["ServiceContract","ServiceContract"],["ServiceTaskHistory","ServiceTaskHistory"],["User","User"]]);
+        await tx.executeBatch(r'''INSERT INTO "syncing_table" (_id, entity_name) VALUES(?,?) ON CONFLICT(_id) DO NOTHING;''', [["eeda4a6faa72cf687f6e3eb1","ServiceTask"],["70ef1c79e5a39a8cf086856a","Employee"],["8c7f45b71325562874bb404e","Site"],["5c7fc216f6714b6a74cf8ade","Person"],["a0b5e2706a8f4aea0c1d90f0","LegalEntity"],["fc18b9b0b20ec9df3ce841ac","ServicePoint"],["7e38810eb09957175458e843","ServiceContract"],["c56e4257144a6287c0116259","ServiceTaskHistory"],["b39f1d3c806e05bd1a54d25a","User"],["d1add9b6c3ce12ebdb6a52b3","RulesBoard"]]);
+      },
+    ))
+    ..createDatabase = SqliteMigration(
+      12,
+      (tx) async {
+        await tx.execute(r'''CREATE TABLE "ServiceTask" (
+  "_id" TEXT PRIMARY KEY,
+  "lts" TIMESTAMP,
+  "is_deleted" INTEGER,
+  "is_unsynced" INTEGER,
+  "id" TEXT,
+  "assigneeId" TEXT,
+  "cts" INTEGER,
+  "date" INTEGER,
+  "description" TEXT,
+  "processing" TEXT,
+  "servicePointId" TEXT,
+  "siteId" TEXT,
+  "services" TEXT
+);''');
+        await tx.execute(r'''CREATE TABLE "Settings" (
+  "_id" TEXT PRIMARY KEY,
+  "lts" TIMESTAMP,
+  "is_deleted" INTEGER,
+  "is_unsynced" INTEGER,
+  "userId" TEXT UNIQUE,
+  "sortingOption" TEXT,
+  "showCompleteTasks" INTEGER,
+  "selectedDate" INTEGER,
+  "selectedWarehouseMode" TEXT,
+  "filterMasterId" TEXT,
+  "filterSiteId" TEXT,
+  "preferredNavigationApp" TEXT
+);''');
+        await tx.execute(r'''CREATE TABLE "Employee" (
+  "_id" TEXT PRIMARY KEY,
+  "lts" TIMESTAMP,
+  "is_deleted" INTEGER,
+  "is_unsynced" INTEGER,
+  "id" TEXT,
+  "name" TEXT,
+  "siteId" TEXT,
+  "personId" TEXT
+);''');
+        await tx.execute(r'''CREATE TABLE "Site" (
+  "_id" TEXT PRIMARY KEY,
+  "lts" TIMESTAMP,
+  "is_deleted" INTEGER,
+  "is_unsynced" INTEGER,
+  "id" TEXT,
+  "code" TEXT,
+  "name" TEXT
+);''');
+        await tx.execute(r'''CREATE TABLE "Person" (
+  "_id" TEXT PRIMARY KEY,
+  "lts" TIMESTAMP,
+  "is_deleted" INTEGER,
+  "is_unsynced" INTEGER,
+  "id" TEXT,
+  "firstName" TEXT,
+  "lastName" TEXT
+);''');
+        await tx.execute(r'''CREATE TABLE "LegalEntity" (
+  "_id" TEXT PRIMARY KEY,
+  "lts" TIMESTAMP,
+  "is_deleted" INTEGER,
+  "is_unsynced" INTEGER,
+  "id" TEXT,
+  "name" TEXT
+);''');
+        await tx.execute(r'''CREATE TABLE "ServicePoint" (
+  "_id" TEXT PRIMARY KEY,
+  "lts" TIMESTAMP,
+  "is_deleted" INTEGER,
+  "is_unsynced" INTEGER,
+  "id" TEXT,
+  "address" TEXT,
+  "currentServiceContractId" TEXT
+);''');
+        await tx.execute(r'''CREATE TABLE "ServiceContract" (
+  "_id" TEXT PRIMARY KEY,
+  "lts" TIMESTAMP,
+  "is_deleted" INTEGER,
+  "is_unsynced" INTEGER,
+  "id" TEXT,
+  "customerPersonId" TEXT,
+  "customerLegalEntityId" TEXT
+);''');
+        await tx.execute(r'''CREATE TABLE "ServiceTaskHistory" (
+  "_id" TEXT PRIMARY KEY,
+  "lts" TIMESTAMP,
+  "is_deleted" INTEGER,
+  "is_unsynced" INTEGER,
+  "id" TEXT,
+  "assigneeId" TEXT,
+  "authId" TEXT,
+  "comment" TEXT,
+  "cts" INTEGER,
+  "processing" TEXT,
+  "serviceTaskId" TEXT,
+  "timestamp" INTEGER,
+  "type" TEXT
+);''');
+        await tx.execute(r'''CREATE TABLE "User" (
+  "_id" TEXT PRIMARY KEY,
+  "lts" TIMESTAMP,
+  "is_deleted" INTEGER,
+  "is_unsynced" INTEGER,
+  "id" TEXT,
+  "email" TEXT,
+  "name" TEXT,
+  "phone" TEXT,
+  "isAdmin" INTEGER
+);''');
+        await tx.execute(r'''CREATE TABLE "RulesBoard" (
+  "_id" TEXT PRIMARY KEY,
+  "lts" TIMESTAMP,
+  "is_deleted" INTEGER,
+  "is_unsynced" INTEGER,
+  "userId" TEXT,
+  "cts" INTEGER,
+  "fullResyncCollections" TEXT
+);''');
+        await tx.execute(r'''CREATE TABLE "syncing_table" (
+  "_id" TEXT PRIMARY KEY,
+  "entity_name" TEXT,
+  "last_received_lts" TIMESTAMP
+);''');
+        await tx.executeBatch(r'''INSERT INTO "syncing_table" (_id, entity_name) VALUES(?, ?) ON CONFLICT(_id) DO NOTHING;''', [["bd3fd09007f291515831103e","ServiceTask"],["cc7cb62726f63cad97ac5840","Employee"],["8887bd4f97baac4de5f762aa","Site"],["467dbda4e58c8615f028611e","Person"],["cbc570abc322356f28900d07","LegalEntity"],["1b270a2ca608502a872a6d08","ServicePoint"],["55902e2675e03fcdcf2c9411","ServiceContract"],["f525afe885c4dd06b7c1d0eb","ServiceTaskHistory"],["d10ac7231f475439105476de","User"],["5747c60767b921e91e7e59ac","RulesBoard"]]);
       },
     );
 }
@@ -755,6 +746,7 @@ class User {
   final String? email;
   final String? name;
   final String? phone;
+  final bool? isAdmin;
 
   User({
     String? internal_id,
@@ -765,6 +757,7 @@ class User {
     this.email,
     this.name,
     this.phone,
+    this.isAdmin,
   }) : _id = internal_id;
 
   factory User.fromMap(Map<String, dynamic> map) {
@@ -777,6 +770,7 @@ class User {
       email: map['email']?.toString(),
       name: map['name']?.toString(),
       phone: map['phone']?.toString(),
+      isAdmin: map['isAdmin'] == true || map['isAdmin'] == 1,
     );
   }
 
@@ -790,6 +784,51 @@ class User {
       'email': email,
       'name': name,
       'phone': phone,
+      'isAdmin': isAdmin == true ? 1 : 0,
+    };
+  }
+}
+
+class Rulesboard {
+  final String? _id;
+  final String? lts;
+  final int? is_deleted;
+  final int? is_unsynced;
+  final String? userId;
+  final DateTime? cts;
+  final String? fullResyncCollections;
+
+  Rulesboard({
+    String? internal_id,
+    this.lts,
+    this.is_deleted,
+    this.is_unsynced,
+    this.userId,
+    this.cts,
+    this.fullResyncCollections,
+  }) : _id = internal_id;
+
+  factory Rulesboard.fromMap(Map<String, dynamic> map) {
+    return Rulesboard(
+      internal_id: map['_id']?.toString(),
+      lts: map['lts']?.toString(),
+      is_deleted: map['is_deleted'] != null ? (int.tryParse(map['is_deleted'].toString()) ?? (map['is_deleted'] is num ? map['is_deleted'].toint() : null)) : null,
+      is_unsynced: map['is_unsynced'] != null ? (int.tryParse(map['is_unsynced'].toString()) ?? (map['is_unsynced'] is num ? map['is_unsynced'].toint() : null)) : null,
+      userId: map['userId']?.toString(),
+      cts: map['cts'] != null ? DateTime.tryParse(map['cts'].toString()) : null,
+      fullResyncCollections: map['fullResyncCollections']?.toString(),
+    );
+  }
+
+  Map<String, dynamic> toMap() {
+    return {
+      '_id': _id,
+      'lts': lts,
+      'is_deleted': is_deleted,
+      'is_unsynced': is_unsynced,
+      'userId': userId,
+      'cts': cts?.toIso8601String(),
+      'fullResyncCollections': fullResyncCollections,
     };
   }
 }
@@ -834,7 +873,8 @@ class MetaEntity extends AbstractMetaEntity {
     'ServicePoint': '_id, lts, is_deleted, id, address, currentServiceContractId',
     'ServiceContract': '_id, lts, is_deleted, id, customerPersonId, customerLegalEntityId',
     'ServiceTaskHistory': '_id, lts, is_deleted, id, assigneeId, authId, comment, cts, processing, serviceTaskId, timestamp, type',
-    'User': '_id, lts, is_deleted, id, email, name, phone',
+    'User': '_id, lts, is_deleted, id, email, name, phone, isAdmin',
+    'RulesBoard': '_id, lts, is_deleted, userId, cts, fullResyncCollections',
     'syncing_table': '_id, entity_name, last_received_lts',
   };
   @override
@@ -848,7 +888,8 @@ class MetaEntity extends AbstractMetaEntity {
     'ServicePoint': ["_id","lts","is_deleted","id","address","currentServiceContractId"],
     'ServiceContract': ["_id","lts","is_deleted","id","customerPersonId","customerLegalEntityId"],
     'ServiceTaskHistory': ["_id","lts","is_deleted","id","assigneeId","authId","comment","cts","processing","serviceTaskId","timestamp","type"],
-    'User': ["_id","lts","is_deleted","id","email","name","phone"],
+    'User': ["_id","lts","is_deleted","id","email","name","phone","isAdmin"],
+    'RulesBoard': ["_id","lts","is_deleted","userId","cts","fullResyncCollections"],
     'syncing_table': ["_id","entity_name","last_received_lts"],
   };
 }

@@ -3,15 +3,15 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 
 void main(List<String> args) async {
-  if (args.length < 2 || args.length > 3) {
-    print('Usage: dart sync_generator.dart <server_url> <app_id> [auth_token]');
+  if (args.length < 2 || args.length > 4) {
+    print('Usage: dart sync_generator.dart <server_url> <app_id> [auth_token] [output_path]');
     exit(1);
   }
 
   String serverUrl = args[0];
   final targetAppId = args[1];
-  final authToken = args.length == 3 ? args[2] : null;
-  final outputFilePath = 'pregenerated.dart';
+  final authToken = args.length > 2 ? args[2] : null;
+  final outputFilePath = args.length > 3 ? args[3] : 'pregenerated.dart';
 
   if (serverUrl.endsWith('/')) {
     serverUrl = serverUrl.substring(0, serverUrl.length - 1);
