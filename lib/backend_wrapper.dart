@@ -143,7 +143,8 @@ class BackendNotifier extends ChangeNotifier {
     String orderBy = '',
     required List<String> triggerOnTables,
   }) {
-    final selectClause = select ?? 'SELECT *';
+    // Correctly prepend SELECT to the select clause.
+    final selectClause = 'SELECT ${select ?? '*'}';
     final fromClause = 'FROM $from';
 
     final joinClauses = joins.map((join) {
