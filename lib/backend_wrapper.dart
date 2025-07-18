@@ -136,41 +136,17 @@ class BackendNotifier extends ChangeNotifier {
   }
 
   Stream<List> watch({
-    required String from,
-    List<Map<String, String>> joins = const [],
-    String? select,
+    required String sql,
+    required List<String> tables,
     String where = '',
-    String orderBy = '',
-    required List<String> triggerOnTables,
+    String order = '',
   }) {
-    
-    final selectClause = select ?? 'SELECT *';
-    final fromClause = 'FROM $from';
-
-    final joinClauses = joins.map((join) {
-      final type = join['type'] ?? 'JOIN';
-      final table = join['table'];
-      final on = join['on'];
-      if (table == null || on == null) {
-        throw ArgumentError('Join map must contain "table" and "on" keys.');
-      }
-      return '$type $table ON $on';
-    }).join(' ');
-
-    final whereClause = where.isNotEmpty ? 'WHERE $where' : '';
-    final orderByClause = orderBy.isNotEmpty ? 'ORDER BY $orderBy' : '';
-
-    final finalSql = [
-      selectClause,
-      fromClause,
-      joinClauses,
-      whereClause,
-      orderByClause,
-    ].where((s) => s.isNotEmpty).join(' ');
-
+    final defaultWhere = ' where (is_deleted != 1 OR is_deleted IS NULL) ';
+    final _where = where.isNotEmpty ? ' AND ($where)' : '';
+    final _order = order.isNotEmpty ? ' ORDER BY $order' : '';
     return _db!.watch(
-      finalSql,
-      triggerOnTables: triggerOnTables,
+      sql + defaultWhere + _where + _order,
+      triggerOnTables: tables,
     );
   }
 
