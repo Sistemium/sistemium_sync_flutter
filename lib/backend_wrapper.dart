@@ -135,7 +135,7 @@ class BackendNotifier extends ChangeNotifier {
     required String sql,
     required List<String> triggerOnTables,
   }) {
-    if (!sql.contains('is_deleted != 1 OR is_deleted IS NULL')) {
+    if (!sql.contains('is_deleted')) {
       throw Exception(
         'Query should filter out deleted objects using: where is_deleted != 1 OR is_deleted IS NULL',
       );
@@ -144,7 +144,7 @@ class BackendNotifier extends ChangeNotifier {
   }
 
   Future<ResultSet> getAll({required String sql}) {
-    if (!sql.contains('is_deleted != 1 OR is_deleted IS NULL')) {
+    if (!sql.contains('is_deleted')) {
       throw Exception(
         'Query should filter out deleted objects using: where is_deleted != 1 OR is_deleted IS NULL',
       );
