@@ -110,9 +110,7 @@ class BackendNotifier extends ChangeNotifier {
     if (_serverUrl == null) return null;
     try {
       final uri = Uri.parse('$_serverUrl/rules-lts');
-      final headers = {
-        'appid': abstractSyncConstants.appId,
-      };
+      final headers = {'appid': abstractSyncConstants.appId};
       if (_authToken != null) {
         headers['authorization'] = _authToken!;
       }
@@ -137,28 +135,23 @@ class BackendNotifier extends ChangeNotifier {
 
   Stream<List> watch({
     required String sql,
-    required List<String> tables,
-    String where = '',
-    String order = '',
+    required List<String> triggerOnTables,
   }) {
-    final defaultWhere = ' where (is_deleted != 1 OR is_deleted IS NULL) ';
-    final _where = where.isNotEmpty ? ' AND ($where)' : '';
-    final _order = order.isNotEmpty ? ' ORDER BY $order' : '';
-    return _db!.watch(
-      sql + defaultWhere + _where + _order,
-      triggerOnTables: tables,
-    );
+    if (!sql.contains('is_deleted != 1 OR is_deleted IS NULL')) {
+      throw Exception(
+        'Query should filter out deleted objects using: where is_deleted != 1 OR is_deleted IS NULL',
+      );
+    }
+    return _db!.watch(sql, triggerOnTables: triggerOnTables);
   }
 
-  Future<ResultSet> getAll({
-    required String sql,
-    String where = '',
-    String order = '',
-  }) {
-    final defaultWhere = ' where (is_deleted != 1 OR is_deleted IS NULL) ';
-    final _where = where.isNotEmpty ? ' AND ($where)' : '';
-    final _order = order.isNotEmpty ? ' ORDER BY $order' : '';
-    return _db!.getAll(sql + defaultWhere + _where + _order);
+  Future<ResultSet> getAll({required String sql}) {
+    if (!sql.contains('is_deleted != 1 OR is_deleted IS NULL')) {
+      throw Exception(
+        'Query should filter out deleted objects using: where is_deleted != 1 OR is_deleted IS NULL',
+      );
+    }
+    return _db!.getAll(sql);
   }
 
   Future<void> write({
@@ -226,17 +219,12 @@ class BackendNotifier extends ChangeNotifier {
     final q = {'name': name, 'pageSize': pageSize.toString()};
     if (lastReceivedLts != null) q['lts'] = lastReceivedLts;
     final uri = Uri.parse('$_serverUrl/data').replace(queryParameters: q);
-    final headers = {
-      'appid': abstractSyncConstants.appId,
-    };
+    final headers = {'appid': abstractSyncConstants.appId};
     if (_authToken != null) {
       headers['authorization'] = _authToken!;
     }
 
-    final res = await http.get(
-      uri,
-      headers: headers,
-    );
+    final res = await http.get(uri, headers: headers);
     if (res.statusCode == 200) {
       final data = jsonDecode(res.body);
       await onData(data);
@@ -360,16 +348,17 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
 
     await dbLocal.writeTransaction((tx) async {
       // 1. Early exit if any unsynced data exists
-      final unsyncedAny = await tx.getAll(
-        'select entity_name from syncing_table',
-      ).then((tables) async {
-        for (var t in tables) {
-          final rows = await tx.getAll(
-              'select 1 from ${t['entity_name']} where is_unsynced = 1 limit 1');
-          if (rows.isNotEmpty) return true;
-        }
-        return false;
-      });
+      final unsyncedAny = await tx
+          .getAll('select entity_name from syncing_table')
+          .then((tables) async {
+            for (var t in tables) {
+              final rows = await tx.getAll(
+                'select 1 from ${t['entity_name']} where is_unsynced = 1 limit 1',
+              );
+              if (rows.isNotEmpty) return true;
+            }
+            return false;
+          });
 
       if (unsyncedAny) {
         if (kDebugMode) {
@@ -380,7 +369,9 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
       }
 
       // 2. Fetch RulesBoard entries (ascending by lts)
-      final rulesEntries = await tx.getAll('select * from RulesBoard order by lts asc');
+      final rulesEntries = await tx.getAll(
+        'select * from RulesBoard order by lts asc',
+      );
       if (kDebugMode) {
         print('[RulesBoard] Found ${rulesEntries.length} entries.');
       }
@@ -420,7 +411,9 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
       final lastLts = rulesEntries.last['lts'];
       if (kDebugMode) {
         print('[RulesBoard] Clearing local RulesBoard table.');
-        print('[RulesBoard] Setting last_received_lts for RulesBoard to: $lastLts');
+        print(
+          '[RulesBoard] Setting last_received_lts for RulesBoard to: $lastLts',
+        );
       }
       await tx.execute('delete from RulesBoard');
       await tx.execute(
