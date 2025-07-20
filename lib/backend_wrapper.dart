@@ -136,66 +136,17 @@ class BackendNotifier extends ChangeNotifier {
   }
 
   Stream<List> watch({
-    required String from,
-    List<Map<String, String>> joins = const [],
-    String? select,
+    required String sql,
+    required List<String> tables,
     String where = '',
-    String orderBy = '',
-    required List<String> triggerOnTables,
+    String order = '',
   }) {
-    // Correctly prepend SELECT to the select clause.
-    final selectClause = 'SELECT ${select ?? '*'}';
-    final fromClause = 'FROM $from';
-
-    final joinClauses = joins.map((join) {
-      final type = join['type'] ?? 'JOIN';
-      final table = join['table'];
-      final on = join['on'];
-      if (table == null || on == null) {
-        throw ArgumentError('Join map must contain "table" and "on" keys.');
-      }
-      return '$type $table ON $on';
-    }).join(' ');
-
-    // --- Corrected is_deleted filter logic ---
-    // 1. Get the alias for the main 'from' table.
-    final fromParts = from.split(' ');
-    final mainTableAlias = fromParts.length > 1 ? fromParts.last : fromParts.first;
-
-    // 2. Get aliases for all joined tables.
-    final allTableAliases = [mainTableAlias];
-    for (final join in joins) {
-      final tableClause = join['table'];
-      if (tableClause != null) {
-        final tableParts = tableClause.split(' ');
-        final tableAlias = tableParts.length > 1 ? tableParts.last : tableParts.first;
-        allTableAliases.add(tableAlias);
-      }
-    }
-
-    // 3. Create a soft-delete filter for EVERY table involved.
-    final softDeleteFilters = allTableAliases
-        .map((alias) => '($alias.is_deleted != 1 OR $alias.is_deleted IS NULL)')
-        .join(' AND ');
-
-    // 4. Combine with the user's custom 'where' clause.
-    final userWhere = where.isNotEmpty ? 'AND ($where)' : '';
-    final whereClause = 'WHERE $softDeleteFilters $userWhere';
-    // --- End of corrected logic ---
-    
-    final orderByClause = orderBy.isNotEmpty ? 'ORDER BY $orderBy' : '';
-
-    final finalSql = [
-      selectClause,
-      fromClause,
-      joinClauses,
-      whereClause,
-      orderByClause,
-    ].where((s) => s.isNotEmpty).join(' ');
-
+    final defaultWhere = ' where (is_deleted != 1 OR is_deleted IS NULL) ';
+    final _where = where.isNotEmpty ? ' AND ($where)' : '';
+    final _order = order.isNotEmpty ? ' ORDER BY $order' : '';
     return _db!.watch(
-      finalSql,
-      triggerOnTables: triggerOnTables,
+      sql + defaultWhere + _where + _order,
+      triggerOnTables: tables,
     );
   }
 
