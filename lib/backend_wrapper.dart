@@ -34,8 +34,6 @@ class BackendNotifier extends ChangeNotifier {
     required this.abstractMetaEntity,
   });
 
-  SqliteDatabase? get db => _db;
-
   Future<void> initDb({
     String? serverUrl,
     required String userId,
