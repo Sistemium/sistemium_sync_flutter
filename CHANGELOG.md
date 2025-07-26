@@ -1,3 +1,15 @@
+## 1.6.0
+
+* **BREAKING CHANGE**: Renamed timestamp field from `lts` to `ts`
+* Updated API endpoints: `/rules-lts` → `/rules-ts`
+* Updated database schema: `last_received_lts` → `last_received_ts`
+* Updated all field references and variable names for consistency
+* Requires server version with `ts` field support
+
+## 1.5.3
+
+* Previous stable release
+
 ## 0.0.1
 
 * TODO: Describe initial release.

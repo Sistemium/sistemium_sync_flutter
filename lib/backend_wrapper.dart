@@ -85,16 +85,16 @@ class BackendNotifier extends ChangeNotifier {
         return;
       }
 
-      final latestLts = await _requestLatestRulesBoardLts();
+      final latestTs = await _requestLatestRulesBoardTs();
 
-      if (latestLts == null) {
+      if (latestTs == null) {
         _scheduleRulesBoardRetry(db);
         return;
       }
 
       await db.execute(
-        'INSERT INTO syncing_table (_id, entity_name, last_received_lts) VALUES (?, ?, ?)',
-        [ObjectId().hexString, 'RulesBoard', latestLts],
+        'INSERT INTO syncing_table (_id, entity_name, last_received_ts) VALUES (?, ?, ?)',
+        [ObjectId().hexString, 'RulesBoard', latestTs],
       );
       _rulesBoardSetupComplete = true;
     } catch (e, st) {
@@ -106,10 +106,10 @@ class BackendNotifier extends ChangeNotifier {
     }
   }
 
-  Future<String?> _requestLatestRulesBoardLts() async {
+  Future<String?> _requestLatestRulesBoardTs() async {
     if (_serverUrl == null) return null;
     try {
-      final uri = Uri.parse('$_serverUrl/rules-lts');
+      final uri = Uri.parse('$_serverUrl/rules-ts');
       final headers = {'appid': abstractSyncConstants.appId};
       if (_authToken != null) {
         headers['authorization'] = _authToken!;
@@ -118,10 +118,10 @@ class BackendNotifier extends ChangeNotifier {
       final res = await http.get(uri, headers: headers);
       if (res.statusCode == 200) {
         final body = jsonDecode(res.body);
-        return body['lts'] as String?;
+        return body['ts'] as String?;
       }
     } catch (e) {
-      if (kDebugMode) print('RulesBoard LTS request failed: $e');
+      if (kDebugMode) print('RulesBoard TS request failed: $e');
     }
     return null;
   }
@@ -212,12 +212,12 @@ class BackendNotifier extends ChangeNotifier {
 
   Future<void> _fetchData({
     required String name,
-    String? lastReceivedLts,
+    String? lastReceivedTs,
     required int pageSize,
     required Future<void> Function(Map<String, dynamic>) onData,
   }) async {
     final q = {'name': name, 'pageSize': pageSize.toString()};
-    if (lastReceivedLts != null) q['lts'] = lastReceivedLts;
+    if (lastReceivedTs != null) q['ts'] = lastReceivedTs;
     final uri = Uri.parse('$_serverUrl/data').replace(queryParameters: q);
     final headers = {'appid': abstractSyncConstants.appId};
     if (_authToken != null) {
@@ -249,11 +249,11 @@ class BackendNotifier extends ChangeNotifier {
       for (var table in tables) {
         int page = 1000;
         bool more = true;
-        String? lts = table['last_received_lts']?.toString() ?? '';
+        String? ts = table['last_received_ts']?.toString() ?? '';
         while (more && _db != null) {
           await _fetchData(
             name: table['entity_name'],
-            lastReceivedLts: lts,
+            lastReceivedTs: ts,
             pageSize: page,
             onData: (resp) async {
               await _db!.writeTransaction((tx) async {
@@ -268,7 +268,7 @@ class BackendNotifier extends ChangeNotifier {
                 }
                 if (kDebugMode) {
                   print('Syncing ${table['entity_name']}');
-                  print('Last received LTS: $lts');
+                  print('Last received TS: $ts');
                   print('Received ${resp['data']?.length ?? 0} rows');
                 }
                 if ((resp['data']?.length ?? 0) == 0) {
@@ -291,7 +291,7 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
 ''';
                 final data = List<Map<String, dynamic>>.from(resp['data']);
                 if (kDebugMode) {
-                  print('Last lts in response: ${data.last['lts']}');
+                  print('Last ts in response: ${data.last['ts']}');
                 }
                 final batch = data
                     .map<List<Object?>>(
@@ -300,13 +300,13 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
                     .toList();
                 await tx.executeBatch(sql, batch);
                 await tx.execute(
-                  'UPDATE syncing_table SET last_received_lts = ? WHERE entity_name = ?',
-                  [data.last['lts'], name],
+                  'UPDATE syncing_table SET last_received_ts = ? WHERE entity_name = ?',
+                  [data.last['ts'], name],
                 );
                 if (data.length < page) {
                   more = false;
                 } else {
-                  lts = data.last['lts'];
+                  ts = data.last['ts'];
                 }
               });
             },
@@ -368,9 +368,9 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
         return; // abort processing rules
       }
 
-      // 2. Fetch RulesBoard entries (ascending by lts)
+      // 2. Fetch RulesBoard entries (ascending by ts)
       final rulesEntries = await tx.getAll(
-        'select * from RulesBoard order by lts asc',
+        'select * from RulesBoard order by ts asc',
       );
       if (kDebugMode) {
         print('[RulesBoard] Found ${rulesEntries.length} entries.');
@@ -399,26 +399,26 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
           // TODO: This is a workaround for a bug in sqlite_async <= 0.11.7 where
           // a DELETE statement without a WHERE clause does not trigger the watch stream.
           await tx.execute('delete from "$tbl" where 1=1');
-          // Reset lts in syncing_table
+          // Reset ts in syncing_table
           await tx.execute(
-            'update syncing_table set last_received_lts = NULL where entity_name = ?',
+            'update syncing_table set last_received_ts = NULL where entity_name = ?',
             [tbl],
           );
         }
       }
 
-      // 4. Capture latest lts and clear RulesBoard
-      final lastLts = rulesEntries.last['lts'];
+      // 4. Capture latest ts and clear RulesBoard
+      final lastTs = rulesEntries.last['ts'];
       if (kDebugMode) {
         print('[RulesBoard] Clearing local RulesBoard table.');
         print(
-          '[RulesBoard] Setting last_received_lts for RulesBoard to: $lastLts',
+          '[RulesBoard] Setting last_received_ts for RulesBoard to: $lastTs',
         );
       }
       await tx.execute('delete from RulesBoard');
       await tx.execute(
-        'update syncing_table set last_received_lts = ? where entity_name = ?',
-        [lastLts, 'RulesBoard'],
+        'update syncing_table set last_received_ts = ? where entity_name = ?',
+        [lastTs, 'RulesBoard'],
       );
 
       needRepeat = true; // after processing, run another full sync

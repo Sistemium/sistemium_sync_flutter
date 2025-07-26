@@ -8,7 +8,7 @@
 
 - **`BackendNotifier`**: The central class that orchestrates all synchronization logic, database interactions, and server communication.
 - **`sqlite_async`**: The underlying package used for all local SQLite database operations.
-- **`syncing_table`**: A special table in the local SQLite database that tracks the `last_received_lts` (timestamp) for every other syncable table, enabling efficient delta-syncing.
+- **`syncing_table`**: A special table in the local SQLite database that tracks the `last_received_ts` (timestamp) for every other syncable table, enabling efficient delta-syncing.
 
 ## 3. Core Workflows
 
@@ -17,9 +17,9 @@
 This is the main process for getting data from the server.
 
 1.  **Send Unsynced Data**: First, it sends any locally created or modified data that is marked as `is_unsynced` to the server.
-2.  **Fetch Remote Changes**: For each table listed in the `syncing_table`, it makes a request to the server's `/data` endpoint. It includes the `last_received_lts` for that table, so the server only returns documents that are newer.
+2.  **Fetch Remote Changes**: For each table listed in the `syncing_table`, it makes a request to the server's `/data` endpoint. It includes the `last_received_ts` for that table, so the server only returns documents that are newer.
 3.  **Upsert Data**: It takes the data received from the server and upserts it into the local SQLite database.
-4.  **Update Timestamp**: After successfully processing a batch of data, it updates the `last_received_lts` for that table in the `syncing_table`.
+4.  **Update Timestamp**: After successfully processing a batch of data, it updates the `last_received_ts` for that table in the `syncing_table`.
 
 ### 3.2. Real-time Updates (SSE)
 
@@ -36,7 +36,7 @@ This is the critical client-side mechanism for handling data resets when a user'
 3.  **Process Local Entries**: After syncing, the `_processRulesBoard` function runs. It reads **all** entries from its local `RulesBoard` table.
 4.  **Truncate and Reset**: For each entry, it reads the `fullResyncCollections` field (a list of table names) and performs two actions for each table in the list:
     - It completely wipes the local table (e.g., `delete from "ServiceTask"`).
-    - It sets the `last_received_lts` for that table in the `syncing_table` to `NULL`.
+    - It sets the `last_received_ts` for that table in the `syncing_table` to `NULL`.
 5.  **Trigger Full Resync**: This process ensures that on the next `fullSync`, the client will download a fresh, complete copy of the data for the truncated tables, reflecting the user's new permissions.
 
 ### 3.4. UI Reactivity (`watch`)
