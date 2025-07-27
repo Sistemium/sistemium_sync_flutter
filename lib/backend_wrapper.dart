@@ -344,8 +344,79 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
       await fullSync();
     }
 
-    // After regular sync flow, process any RulesBoard instructions.
+    // After regular sync flow, process Archive entries first, then RulesBoard.
+    await _processArchive();
     await _processRulesBoard();
+  }
+
+  // -----------------------------------------------------------------------
+  // Archive handling
+  // -----------------------------------------------------------------------
+
+  Future<void> _processArchive() async {
+    // Ensure DB is available
+    final dbLocal = _db;
+    if (dbLocal == null) return;
+
+    if (kDebugMode) {
+      print('[Archive] Starting processing...');
+    }
+
+    await dbLocal.writeTransaction((tx) async {
+      // Get all Archive entries
+      final archiveEntries = await tx.getAll(
+        'select * from Archive order by ts asc',
+      );
+      if (kDebugMode) {
+        print('[Archive] Found ${archiveEntries.length} entries.');
+      }
+      if (archiveEntries.isEmpty) return; // nothing to process
+
+      // Process each Archive entry
+      for (var entry in archiveEntries) {
+        if (kDebugMode) {
+          print('[Archive] Processing entry: ${entry['_id']}');
+        }
+        
+        final entityName = entry['name'];
+        final entityId = entry['id'];
+        
+        if (entityName == null || entityId == null) {
+          if (kDebugMode) {
+            print('[Archive] Skipping malformed entry: missing name or id');
+          }
+          continue;
+        }
+
+        if (kDebugMode) {
+          print('[Archive] Deleting $entityId from $entityName');
+        }
+
+        // Delete the referenced document if it exists
+        await tx.execute(
+          'DELETE FROM "$entityName" WHERE _id = ?',
+          [entityId],
+        );
+      }
+
+      // After processing all entries, clear the Archive table
+      if (archiveEntries.isNotEmpty) {
+        final lastTs = archiveEntries.last['ts'];
+        if (kDebugMode) {
+          print('[Archive] Clearing local Archive table.');
+          print('[Archive] Setting last_received_ts for Archive to: $lastTs');
+        }
+        await tx.execute('DELETE FROM Archive');
+        await tx.execute(
+          'UPDATE syncing_table SET last_received_ts = ? WHERE entity_name = ?',
+          [lastTs, 'Archive'],
+        );
+      }
+    });
+
+    if (kDebugMode) {
+      print('[Archive] Processing complete.');
+    }
   }
 
   // -----------------------------------------------------------------------
