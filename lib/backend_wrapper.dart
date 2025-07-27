@@ -137,20 +137,10 @@ class BackendNotifier extends ChangeNotifier {
     required String sql,
     required List<String> triggerOnTables,
   }) {
-    if (!sql.contains('is_deleted')) {
-      throw Exception(
-        'Query should filter out deleted objects using: where is_deleted != 1 OR is_deleted IS NULL',
-      );
-    }
     return _db!.watch(sql, triggerOnTables: triggerOnTables);
   }
 
   Future<ResultSet> getAll({required String sql}) {
-    if (!sql.contains('is_deleted')) {
-      throw Exception(
-        'Query should filter out deleted objects using: where is_deleted != 1 OR is_deleted IS NULL',
-      );
-    }
     return _db!.getAll(sql);
   }
 
@@ -504,9 +494,6 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
           'select ${abstractMetaEntity.syncableColumnsString[table['entity_name']]} from ${table['entity_name']} where is_unsynced = 1',
         );
         if (DeepCollectionEquality().equals(rows, rows2)) {
-          await tx.execute(
-            'delete from ${table['entity_name']} where is_unsynced = 1 and is_deleted = 1',
-          );
           await tx.execute(
             'update ${table['entity_name']} set is_unsynced = 0 where is_unsynced = 1',
           );
