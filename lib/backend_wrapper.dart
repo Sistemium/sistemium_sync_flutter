@@ -392,6 +392,15 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
         }
         for (var tbl in list) {
           if (tbl is! String) continue;
+          
+          // Skip system tables that handle their own sync state
+          if (tbl == 'RulesBoard' || tbl == 'Archive') {
+            if (kDebugMode) {
+              print('[RulesBoard] Skipping system table: $tbl');
+            }
+            continue;
+          }
+          
           if (kDebugMode) {
             print('[RulesBoard] Truncating table: $tbl');
           }
