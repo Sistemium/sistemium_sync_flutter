@@ -178,10 +178,37 @@ class BackendNotifier extends ChangeNotifier {
   }
 
   Future<void> delete({required String tableName, required String id}) async {
-    await _db!.execute(
-      'UPDATE $tableName SET is_unsynced = 1, is_deleted = 1 WHERE _id = ?',
-      [id],
-    );
+    await _db!.writeTransaction((tx) async {
+      // First get the document data before deleting
+      final docs = await tx.getAll(
+        'SELECT * FROM $tableName WHERE _id = ?',
+        [id],
+      );
+      
+      if (docs.isEmpty) {
+        throw Exception('Document not found for deletion: $id in $tableName');
+      }
+      
+      final docData = docs.first;
+      
+      // Delete the original document
+      await tx.execute(
+        'DELETE FROM $tableName WHERE _id = ?',
+        [id],
+      );
+      
+      // Create Archive entry
+      await tx.execute(
+        'INSERT INTO Archive (_id, id, name, data, is_unsynced) VALUES (?, ?, ?, ?, 1)',
+        [
+          ObjectId().hexString,  // New Archive _id
+          id,                    // Original document's _id goes in id field
+          tableName,             // Entity name goes in name field  
+          jsonEncode(docData),   // Complete document data as JSON
+        ],
+      );
+    });
+    
     await fullSync();
   }
 
