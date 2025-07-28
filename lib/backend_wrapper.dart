@@ -25,8 +25,7 @@ class BackendNotifier extends ChangeNotifier {
   String? userId;
   String? _authToken;
 
-  Timer? _rulesBoardRetryTimer;
-  bool _rulesBoardSetupComplete = false;
+  final Map<String, Timer?> _retryTimers = {};
 
   BackendNotifier({
     required this.abstractPregeneratedMigrations,
@@ -47,8 +46,8 @@ class BackendNotifier extends ChangeNotifier {
     final tempDb = await _openDatabase();
     await abstractPregeneratedMigrations.migrations.migrate(tempDb);
 
-    // Ensure RulesBoard and Archive rows inside syncing_table before exposing DB
-    await _ensureRulesBoardRegistration(tempDb);
+    // Ensure system tables are registered in syncing_table before exposing DB
+    await _ensureTableRegistration(tempDb, 'RulesBoard');
     await _ensureTableRegistration(tempDb, 'Archive');
 
     _db = tempDb;
@@ -61,8 +60,11 @@ class BackendNotifier extends ChangeNotifier {
     _eventSubscription = null;
     _sseConnected = false;
 
-    _rulesBoardRetryTimer?.cancel();
-    _rulesBoardRetryTimer = null;
+    // Cancel all retry timers
+    for (var timer in _retryTimers.values) {
+      timer?.cancel();
+    }
+    _retryTimers.clear();
 
     if (_db != null) await _db!.close();
     _db = null;
@@ -70,7 +72,7 @@ class BackendNotifier extends ChangeNotifier {
   }
 
   // -----------------------------------------------------------------------
-  // RulesBoard syncing_table bootstrap
+  // System tables syncing_table registration
   // -----------------------------------------------------------------------
 
   Future<void> _ensureTableRegistration(SqliteDatabase db, String tableName) async {
@@ -83,15 +85,9 @@ class BackendNotifier extends ChangeNotifier {
         return;
       }
 
-      String? latestTs;
-      if (tableName == 'RulesBoard') {
-        latestTs = await _requestLatestRulesBoardTs();
-        if (latestTs == null) {
-          throw Exception('Failed to get RulesBoard timestamp');
-        }
-      } else {
-        // For other tables like Archive, start with null timestamp
-        latestTs = null;
+      final latestTs = await _requestLatestTableTs(tableName);
+      if (latestTs == null) {
+        throw Exception('Failed to get $tableName timestamp');
       }
 
       await db.execute(
@@ -103,24 +99,17 @@ class BackendNotifier extends ChangeNotifier {
         print('Error ensuring $tableName registration: $e');
         print(st);
       }
-      // For RulesBoard, we still need retry logic
-      if (tableName == 'RulesBoard') {
-        _scheduleRulesBoardRetry(db);
-      }
+      _scheduleTableRetry(db, tableName);
     }
   }
 
-  Future<void> _ensureRulesBoardRegistration(SqliteDatabase db) async {
-    if (_rulesBoardSetupComplete) return;
 
-    await _ensureTableRegistration(db, 'RulesBoard');
-    _rulesBoardSetupComplete = true;
-  }
-
-  Future<String?> _requestLatestRulesBoardTs() async {
+  Future<String?> _requestLatestTableTs(String tableName) async {
     if (_serverUrl == null) return null;
     try {
-      final uri = Uri.parse('$_serverUrl/rules-ts');
+      final endpoint = tableName == 'RulesBoard' ? 'rules-ts' : 'table-ts';
+      final q = tableName == 'RulesBoard' ? {} : {'name': tableName};
+      final uri = Uri.parse('$_serverUrl/$endpoint').replace(queryParameters: q);
       final headers = {'appid': abstractSyncConstants.appId};
       if (_authToken != null) {
         headers['authorization'] = _authToken!;
@@ -132,15 +121,15 @@ class BackendNotifier extends ChangeNotifier {
         return body['ts'] as String?;
       }
     } catch (e) {
-      if (kDebugMode) print('RulesBoard TS request failed: $e');
+      if (kDebugMode) print('$tableName TS request failed: $e');
     }
     return null;
   }
 
-  void _scheduleRulesBoardRetry(SqliteDatabase db) {
-    _rulesBoardRetryTimer?.cancel();
-    _rulesBoardRetryTimer = Timer(const Duration(seconds: 30), () async {
-      await _ensureRulesBoardRegistration(db);
+  void _scheduleTableRetry(SqliteDatabase db, String tableName) {
+    _retryTimers[tableName]?.cancel();
+    _retryTimers[tableName] = Timer(const Duration(seconds: 30), () async {
+      await _ensureTableRegistration(db, tableName);
     });
   }
 
@@ -406,6 +395,19 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
         if (entityName == null || entityId == null) {
           if (kDebugMode) {
             print('[Archive] Skipping malformed entry: missing name or id');
+          }
+          continue;
+        }
+
+        // Check if the table exists in syncing_table
+        final tableExists = await tx.getAll(
+          'SELECT 1 FROM syncing_table WHERE entity_name = ? LIMIT 1',
+          [entityName],
+        );
+
+        if (tableExists.isEmpty) {
+          if (kDebugMode) {
+            print('[Archive] Skipping delete for $entityName - table not in syncing_table');
           }
           continue;
         }
