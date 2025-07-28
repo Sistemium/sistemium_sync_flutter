@@ -358,18 +358,25 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
       print('[Archive] Starting processing...');
     }
 
-    await dbLocal.writeTransaction((tx) async {
-      // Get all Archive entries
+    bool needRepeat = false;
 
+    await dbLocal.writeTransaction((tx) async {
+      // 1. Early exit if any unsynced Archive data exists
       final unsyncedArchive = await tx.getAll(
         'select 1 from Archive where is_unsynced = 1 limit 1',
       );
+
       if (unsyncedArchive.isNotEmpty) {
-        fullSync();
-        return;
+        if (kDebugMode) {
+          print('[Archive] Unsynced Archive data exists, aborting processing.');
+        }
+        needRepeat = true;
+        return; // abort processing
       }
+
+      // 2. Get all Archive entries
       final archiveEntries = await tx.getAll(
-        'select * from Archive where order by ts asc',
+        'select * from Archive order by ts asc',
       );
       if (kDebugMode) {
         print('[Archive] Found ${archiveEntries.length} entries.');
@@ -415,7 +422,12 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
       }
     });
 
-    if (kDebugMode) {
+    if (needRepeat) {
+      if (kDebugMode) {
+        print('[Archive] Processing aborted due to unsynced data, triggering another sync.');
+      }
+      await fullSync();
+    } else if (kDebugMode) {
       print('[Archive] Processing complete.');
     }
   }
