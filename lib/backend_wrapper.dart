@@ -108,7 +108,7 @@ class BackendNotifier extends ChangeNotifier {
     if (_serverUrl == null) return null;
     try {
       final endpoint = tableName == 'RulesBoard' ? 'rules-ts' : 'table-ts';
-      final q = tableName == 'RulesBoard' ? {} : {'name': tableName};
+      final q = tableName == 'RulesBoard' ? <String, String>{} : {'name': tableName};
       final uri = Uri.parse('$_serverUrl/$endpoint').replace(queryParameters: q);
       final headers = {'appid': abstractSyncConstants.appId};
       if (_authToken != null) {
@@ -655,10 +655,10 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
 
 class BackendWrapper extends InheritedNotifier<BackendNotifier> {
   const BackendWrapper({
-    Key? key,
-    required BackendNotifier notifier,
-    required Widget child,
-  }) : super(key: key, notifier: notifier, child: child);
+    super.key,
+    required super.notifier,
+    required super.child,
+  });
 
   static BackendNotifier? of(BuildContext context) =>
       context.dependOnInheritedWidgetOfExactType<BackendWrapper>()?.notifier;
