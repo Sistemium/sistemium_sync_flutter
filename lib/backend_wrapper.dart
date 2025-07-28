@@ -107,9 +107,7 @@ class BackendNotifier extends ChangeNotifier {
   Future<String?> _requestLatestTableTs(String tableName) async {
     if (_serverUrl == null) return null;
     try {
-      final endpoint = tableName == 'RulesBoard' ? 'rules-ts' : 'table-ts';
-      final q = tableName == 'RulesBoard' ? <String, String>{} : {'name': tableName};
-      final uri = Uri.parse('$_serverUrl/$endpoint').replace(queryParameters: q);
+      final uri = Uri.parse('$_serverUrl/latest-ts').replace(queryParameters: {'name': tableName});
       final headers = {'appid': abstractSyncConstants.appId};
       if (_authToken != null) {
         headers['authorization'] = _authToken!;
