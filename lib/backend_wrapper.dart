@@ -170,35 +170,31 @@ class BackendNotifier extends ChangeNotifier {
   Future<void> delete({required String tableName, required String id}) async {
     await _db!.writeTransaction((tx) async {
       // First get the document data before deleting
-      final docs = await tx.getAll(
-        'SELECT * FROM $tableName WHERE _id = ?',
-        [id],
-      );
-      
+      final docs = await tx.getAll('SELECT * FROM $tableName WHERE _id = ?', [
+        id,
+      ]);
+
       if (docs.isEmpty) {
         throw Exception('Document not found for deletion: $id in $tableName');
       }
-      
+
       final docData = docs.first;
-      
+
       // Delete the original document
-      await tx.execute(
-        'DELETE FROM $tableName WHERE _id = ?',
-        [id],
-      );
-      
+      await tx.execute('DELETE FROM $tableName WHERE _id = ?', [id]);
+
       // Create Archive entry
       await tx.execute(
         'INSERT INTO Archive (_id, id, name, data, is_unsynced) VALUES (?, ?, ?, ?, 1)',
         [
-          ObjectId().hexString,  // New Archive _id
-          id,                    // Original document's _id goes in id field
-          tableName,             // Entity name goes in name field  
-          jsonEncode(docData),   // Complete document data as JSON
+          ObjectId().hexString, // New Archive _id
+          id, // Original document's _id goes in id field
+          tableName, // Entity name goes in name field
+          jsonEncode(docData), // Complete document data as JSON
         ],
       );
     });
-    
+
     await fullSync();
   }
 
@@ -365,7 +361,7 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
     await dbLocal.writeTransaction((tx) async {
       // Get all Archive entries
       final archiveEntries = await tx.getAll(
-        'select * from Archive order by ts asc',
+        'select * from Archive where is_processed = 0 order by ts asc',
       );
       if (kDebugMode) {
         print('[Archive] Found ${archiveEntries.length} entries.');
@@ -377,10 +373,10 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
         if (kDebugMode) {
           print('[Archive] Processing entry: ${entry['_id']}');
         }
-        
+
         final entityName = entry['name'];
         final entityId = entry['id'];
-        
+
         if (entityName == null || entityId == null) {
           if (kDebugMode) {
             print('[Archive] Skipping malformed entry: missing name or id');
@@ -393,10 +389,7 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
         }
 
         // Delete the referenced document if it exists
-        await tx.execute(
-          'DELETE FROM "$entityName" WHERE _id = ?',
-          [entityId],
-        );
+        await tx.execute('DELETE FROM "$entityName" WHERE _id = ?', [entityId]);
       }
 
       // After processing all entries, clear the Archive table
@@ -480,7 +473,7 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
         }
         for (var tbl in list) {
           if (tbl is! String) continue;
-          
+
           // Skip system tables that handle their own sync state
           if (tbl == 'RulesBoard' || tbl == 'Archive') {
             if (kDebugMode) {
@@ -488,7 +481,7 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
             }
             continue;
           }
-          
+
           if (kDebugMode) {
             print('[RulesBoard] Truncating table: $tbl');
           }
