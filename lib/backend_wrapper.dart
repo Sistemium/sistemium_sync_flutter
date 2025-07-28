@@ -360,8 +360,16 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
 
     await dbLocal.writeTransaction((tx) async {
       // Get all Archive entries
+
+      final unsyncedArchive = await tx.getAll(
+        'select 1 from Archive where is_unsynced = 1 limit 1',
+      );
+      if (unsyncedArchive.isNotEmpty) {
+        fullSync();
+        return;
+      }
       final archiveEntries = await tx.getAll(
-        'select * from Archive where is_processed = 0 order by ts asc',
+        'select * from Archive where order by ts asc',
       );
       if (kDebugMode) {
         print('[Archive] Found ${archiveEntries.length} entries.');
