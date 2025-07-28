@@ -47,8 +47,9 @@ class BackendNotifier extends ChangeNotifier {
     final tempDb = await _openDatabase();
     await abstractPregeneratedMigrations.migrations.migrate(tempDb);
 
-    // Ensure RulesBoard row inside syncing_table before exposing DB
+    // Ensure RulesBoard and Archive rows inside syncing_table before exposing DB
     await _ensureRulesBoardRegistration(tempDb);
+    await _ensureTableRegistration(tempDb, 'Archive');
 
     _db = tempDb;
     _startSyncer();
@@ -72,38 +73,48 @@ class BackendNotifier extends ChangeNotifier {
   // RulesBoard syncing_table bootstrap
   // -----------------------------------------------------------------------
 
-  Future<void> _ensureRulesBoardRegistration(SqliteDatabase db) async {
-    if (_rulesBoardSetupComplete) return;
-
+  Future<void> _ensureTableRegistration(SqliteDatabase db, String tableName) async {
     try {
       final existing = await db.getAll(
         'SELECT 1 FROM syncing_table WHERE entity_name = ? LIMIT 1',
-        ['RulesBoard'],
+        [tableName],
       );
       if (existing.isNotEmpty) {
-        _rulesBoardSetupComplete = true;
         return;
       }
 
-      final latestTs = await _requestLatestRulesBoardTs();
-
-      if (latestTs == null) {
-        _scheduleRulesBoardRetry(db);
-        return;
+      String? latestTs;
+      if (tableName == 'RulesBoard') {
+        latestTs = await _requestLatestRulesBoardTs();
+        if (latestTs == null) {
+          throw Exception('Failed to get RulesBoard timestamp');
+        }
+      } else {
+        // For other tables like Archive, start with null timestamp
+        latestTs = null;
       }
 
       await db.execute(
         'INSERT INTO syncing_table (_id, entity_name, last_received_ts) VALUES (?, ?, ?)',
-        [ObjectId().hexString, 'RulesBoard', latestTs],
+        [ObjectId().hexString, tableName, latestTs],
       );
-      _rulesBoardSetupComplete = true;
     } catch (e, st) {
       if (kDebugMode) {
-        print('Error ensuring RulesBoard registration: $e');
+        print('Error ensuring $tableName registration: $e');
         print(st);
       }
-      _scheduleRulesBoardRetry(db);
+      // For RulesBoard, we still need retry logic
+      if (tableName == 'RulesBoard') {
+        _scheduleRulesBoardRetry(db);
+      }
     }
+  }
+
+  Future<void> _ensureRulesBoardRegistration(SqliteDatabase db) async {
+    if (_rulesBoardSetupComplete) return;
+
+    await _ensureTableRegistration(db, 'RulesBoard');
+    _rulesBoardSetupComplete = true;
   }
 
   Future<String?> _requestLatestRulesBoardTs() async {
