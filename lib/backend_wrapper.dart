@@ -420,16 +420,10 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
 
       // After processing all entries, clear the Archive table
       if (archiveEntries.isNotEmpty) {
-        final lastTs = archiveEntries.last['ts'];
         if (kDebugMode) {
           print('[Archive] Clearing local Archive table.');
-          print('[Archive] Setting last_received_ts for Archive to: $lastTs');
         }
         await tx.execute('DELETE FROM Archive');
-        await tx.execute(
-          'UPDATE syncing_table SET last_received_ts = ? WHERE entity_name = ?',
-          [lastTs, 'Archive'],
-        );
       }
     });
 
@@ -528,19 +522,11 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
         }
       }
 
-      // 4. Capture latest ts and clear RulesBoard
-      final lastTs = rulesEntries.last['ts'];
+      // 4. Clear RulesBoard
       if (kDebugMode) {
         print('[RulesBoard] Clearing local RulesBoard table.');
-        print(
-          '[RulesBoard] Setting last_received_ts for RulesBoard to: $lastTs',
-        );
       }
       await tx.execute('delete from RulesBoard');
-      await tx.execute(
-        'update syncing_table set last_received_ts = ? where entity_name = ?',
-        [lastTs, 'RulesBoard'],
-      );
 
       needRepeat = true; // after processing, run another full sync
     });
