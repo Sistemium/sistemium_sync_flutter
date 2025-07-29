@@ -415,7 +415,7 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
         }
 
         // Delete the referenced document if it exists
-        await tx.execute('DELETE FROM "$entityName" WHERE _id = ?', [entityId]);
+        await tx.execute('DELETE FROM "$entityName" WHERE id = ?', [entityId]);
       }
 
       // After processing all entries, clear the Archive table
