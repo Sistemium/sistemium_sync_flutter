@@ -610,7 +610,11 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
   Future<void> _syncTableIntoShadow(SqliteDatabase db, String tableName, String? initialTs) async {
     int pageSize = 1000;
     bool hasMore = true;
-    String? currentTs = initialTs;
+    String? currentTs = initialTs ?? '';  // Convert null to empty string like normal sync does
+
+    if (kDebugMode) {
+      print('[RulesBoard] Starting shadow sync for $tableName with initialTs: $initialTs (using: $currentTs)');
+    }
 
     while (hasMore && _db != null) {
       try {
@@ -621,6 +625,10 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
           onData: (resp) async {
             await db.writeTransaction((tx) async {
               final data = List<Map<String, dynamic>>.from(resp['data'] ?? []);
+              
+              if (kDebugMode) {
+                print('[RulesBoard] Shadow sync $tableName: received ${data.length} records');
+              }
               
               if (data.isEmpty) {
                 hasMore = false;
@@ -693,6 +701,13 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
       for (final shadowEntry in shadowTables) {
         final tableName = shadowEntry['entity_name'] as String;
 
+        if (kDebugMode) {
+          // Debug: count records in both tables
+          final originalCount = await tx.getAll('SELECT COUNT(*) as count FROM "$tableName"');
+          final shadowCount = await tx.getAll('SELECT COUNT(*) as count FROM "${tableName}_shadow"');
+          print('[RulesBoard] $tableName - Original: ${originalCount[0]['count']} records, Shadow: ${shadowCount[0]['count']} records');
+        }
+
         // Find records that exist in original but not in shadow (and are synced)
         final toDelete = await tx.getAll('''
           SELECT _id FROM "$tableName" 
@@ -700,8 +715,8 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
           AND is_unsynced = 0
         ''');
 
-        if (kDebugMode && toDelete.isNotEmpty) {
-          print('[RulesBoard] Deleting ${toDelete.length} unauthorized records from $tableName');
+        if (kDebugMode) {
+          print('[RulesBoard] Found ${toDelete.length} records to delete from $tableName');
         }
 
         // Delete unauthorized records
