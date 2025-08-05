@@ -450,93 +450,282 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
       print('[RulesBoard] Starting processing...');
     }
 
-    bool needRepeat = false;
-
-    await dbLocal.writeTransaction((tx) async {
-      // 1. Early exit if any unsynced data exists
-      final unsyncedAny = await tx
-          .getAll('select entity_name from syncing_table')
-          .then((tables) async {
-            for (var t in tables) {
-              final rows = await tx.getAll(
-                'select 1 from ${t['entity_name']} where is_unsynced = 1 limit 1',
-              );
-              if (rows.isNotEmpty) return true;
-            }
-            return false;
-          });
-
-      if (unsyncedAny) {
-        if (kDebugMode) {
-          print('[RulesBoard] Unsynced data exists, aborting.');
-        }
-        needRepeat = true;
-        return; // abort processing rules
-      }
-
-      // 2. Fetch RulesBoard entries (ascending by ts)
-      final rulesEntries = await tx.getAll(
-        'select * from RulesBoard order by ts asc',
-      );
+    // Step 1-2: Ensure everything is synced before processing
+    final hasUnsyncedData = await _hasAnyUnsyncedData(dbLocal);
+    if (hasUnsyncedData) {
       if (kDebugMode) {
-        print('[RulesBoard] Found ${rulesEntries.length} entries.');
-      }
-      if (rulesEntries.isEmpty) return; // nothing to process
-
-      // 3. For each entry, parse list of tables and reset them
-      for (var entry in rulesEntries) {
-        if (kDebugMode) {
-          print('[RulesBoard] Processing entry: $entry');
-        }
-        final jsonStr = entry['fullResyncCollections'];
-        if (jsonStr == null) continue;
-        List<dynamic> list;
-        try {
-          list = jsonDecode(jsonStr);
-        } catch (_) {
-          continue; // skip malformed
-        }
-        for (var tbl in list) {
-          if (tbl is! String) continue;
-
-          // Skip system tables that handle their own sync state
-          if (tbl == 'RulesBoard' || tbl == 'Archive') {
-            if (kDebugMode) {
-              print('[RulesBoard] Skipping system table: $tbl');
-            }
-            continue;
-          }
-
-          if (kDebugMode) {
-            print('[RulesBoard] Truncating table: $tbl');
-          }
-          // Truncate table
-          // TODO: This is a workaround for a bug in sqlite_async <= 0.11.7 where
-          // a DELETE statement without a WHERE clause does not trigger the watch stream.
-          await tx.execute('delete from "$tbl" where 1=1');
-          // Reset ts in syncing_table
-          await tx.execute(
-            'update syncing_table set last_received_ts = NULL where entity_name = ?',
-            [tbl],
-          );
-        }
-      }
-
-      // 4. Clear RulesBoard
-      if (kDebugMode) {
-        print('[RulesBoard] Clearing local RulesBoard table.');
-      }
-      await tx.execute('delete from RulesBoard');
-
-      needRepeat = true; // after processing, run another full sync
-    });
-
-    if (needRepeat) {
-      if (kDebugMode) {
-        print('[RulesBoard] Processing complete, triggering another sync.');
+        print('[RulesBoard] Unsynced data exists, triggering sync first.');
       }
       await fullSync();
+      return;
     }
+
+    // Step 3: Check if shadow syncing_table exists (indicates resuming)
+    final shadowSyncingExists = await dbLocal.getAll(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='syncing_table_shadow'",
+    );
+
+    if (shadowSyncingExists.isNotEmpty) {
+      if (kDebugMode) {
+        print('[RulesBoard] Found existing shadow tables, resuming resync...');
+      }
+      // Jump to step 6 - process shadow syncing table
+      await _processShadowSync(dbLocal);
+      return;
+    }
+
+    // Fetch RulesBoard entries to process
+    final rulesEntries = await dbLocal.getAll(
+      'SELECT * FROM RulesBoard ORDER BY ts ASC',
+    );
+
+    if (rulesEntries.isEmpty) {
+      if (kDebugMode) {
+        print('[RulesBoard] No entries to process.');
+      }
+      return;
+    }
+
+    // Process each RulesBoard entry
+    for (final entry in rulesEntries) {
+      await _processRulesBoardEntry(dbLocal, entry);
+    }
+  }
+
+  Future<bool> _hasAnyUnsyncedData(SqliteDatabase db) async {
+    final tables = await db.getAll('SELECT entity_name FROM syncing_table');
+    for (final table in tables) {
+      final tableName = table['entity_name'] as String;
+      final unsynced = await db.getAll(
+        'SELECT 1 FROM "$tableName" WHERE is_unsynced = 1 LIMIT 1',
+      );
+      if (unsynced.isNotEmpty) return true;
+    }
+    return false;
+  }
+
+  Future<void> _processRulesBoardEntry(SqliteDatabase db, Map<String, dynamic> entry) async {
+    if (kDebugMode) {
+      print('[RulesBoard] Processing entry: $entry');
+    }
+
+    final jsonStr = entry['fullResyncCollections'];
+    if (jsonStr == null) return;
+
+    List<String> tablesToResync;
+    try {
+      final decoded = jsonDecode(jsonStr);
+      tablesToResync = (decoded as List).whereType<String>().toList();
+    } catch (_) {
+      if (kDebugMode) {
+        print('[RulesBoard] Failed to parse fullResyncCollections');
+      }
+      return;
+    }
+
+    // Filter out system tables
+    tablesToResync = tablesToResync.where((tbl) => 
+      tbl != 'RulesBoard' && tbl != 'Archive' && tbl != 'syncing_table'
+    ).toList();
+
+    if (tablesToResync.isEmpty) {
+      if (kDebugMode) {
+        print('[RulesBoard] No user tables to resync');
+      }
+      return;
+    }
+
+    // Step 4: Create shadow tables
+    await db.writeTransaction((tx) async {
+      // Create shadow syncing_table
+      await tx.execute('''
+        CREATE TABLE IF NOT EXISTS syncing_table_shadow (
+          _id TEXT PRIMARY KEY,
+          entity_name TEXT UNIQUE,
+          last_received_ts TEXT
+        )
+      ''');
+
+      // Copy relevant entries from syncing_table to shadow with NULL timestamps
+      for (final table in tablesToResync) {
+        final syncingEntry = await tx.getAll(
+          'SELECT * FROM syncing_table WHERE entity_name = ?',
+          [table],
+        );
+        
+        if (syncingEntry.isNotEmpty) {
+          await tx.execute(
+            'INSERT OR REPLACE INTO syncing_table_shadow (_id, entity_name, last_received_ts) VALUES (?, ?, NULL)',
+            [syncingEntry[0]['_id'], table],
+          );
+
+          // Create shadow table for entity
+          await tx.execute('CREATE TABLE IF NOT EXISTS "${table}_shadow" AS SELECT * FROM "$table" WHERE 0');
+        }
+      }
+
+      // Step 5: Delete the RulesBoard entry we're processing
+      await tx.execute('DELETE FROM RulesBoard WHERE _id = ?', [entry['_id']]);
+    });
+
+    // Step 6: Process shadow sync
+    await _processShadowSync(db);
+  }
+
+  Future<void> _processShadowSync(SqliteDatabase db) async {
+    if (kDebugMode) {
+      print('[RulesBoard] Processing shadow sync...');
+    }
+
+    // Get tables to sync from shadow syncing_table
+    final shadowTables = await db.getAll('SELECT * FROM syncing_table_shadow');
+
+    for (final shadowEntry in shadowTables) {
+      final tableName = shadowEntry['entity_name'] as String;
+      final lastTs = shadowEntry['last_received_ts'] as String?;
+
+      if (kDebugMode) {
+        print('[RulesBoard] Syncing shadow table: $tableName from ts: $lastTs');
+      }
+
+      // Download data into shadow table using existing sync logic
+      await _syncTableIntoShadow(db, tableName, lastTs);
+    }
+
+    // Step 7: Compare and clean up
+    await _compareAndCleanup(db, shadowTables);
+  }
+
+  Future<void> _syncTableIntoShadow(SqliteDatabase db, String tableName, String? initialTs) async {
+    int pageSize = 1000;
+    bool hasMore = true;
+    String? currentTs = initialTs;
+
+    while (hasMore && _db != null) {
+      try {
+        await _fetchData(
+          name: tableName,
+          lastReceivedTs: currentTs,
+          pageSize: pageSize,
+          onData: (resp) async {
+            await db.writeTransaction((tx) async {
+              final data = List<Map<String, dynamic>>.from(resp['data'] ?? []);
+              
+              if (data.isEmpty) {
+                hasMore = false;
+                return;
+              }
+
+              // Get column info
+              final cols = abstractMetaEntity.syncableColumnsList[tableName]!;
+              final pk = '_id';
+              final placeholders = List.filled(cols.length, '?').join(', ');
+              final updates = cols
+                  .where((c) => c != pk)
+                  .map((c) => '$c = excluded.$c')
+                  .join(', ');
+
+              // Insert data into shadow table
+              final sql = '''
+INSERT INTO "${tableName}_shadow" (${cols.join(', ')}) VALUES ($placeholders)
+ON CONFLICT($pk) DO UPDATE SET $updates;
+''';
+              
+              final batch = data
+                  .map<List<Object?>>(
+                    (e) => cols.map<Object?>((c) => e[c]).toList(),
+                  )
+                  .toList();
+              
+              await tx.executeBatch(sql, batch);
+
+              // Update progress with last timestamp
+              if (data.isNotEmpty) {
+                currentTs = data.last['ts']?.toString();
+                await tx.execute(
+                  'UPDATE syncing_table_shadow SET last_received_ts = ? WHERE entity_name = ?',
+                  [currentTs, tableName],
+                );
+              }
+
+              // Check if we need to continue
+              hasMore = data.length >= pageSize;
+            });
+          },
+        );
+
+        if (!hasMore) break;
+      } catch (e) {
+        if (kDebugMode) {
+          print('[RulesBoard] Error syncing shadow table $tableName: $e');
+        }
+        rethrow;
+      }
+    }
+  }
+
+  Future<void> _compareAndCleanup(SqliteDatabase db, List<Map<String, dynamic>> shadowTables) async {
+    // First check for any new unsynced data
+    final hasNewUnsyncedData = await _hasAnyUnsyncedData(db);
+    if (hasNewUnsyncedData) {
+      if (kDebugMode) {
+        print('[RulesBoard] New unsynced data appeared during shadow sync, dropping shadow tables and doing full sync');
+      }
+      // Drop all shadow tables
+      await _dropShadowTables(db, shadowTables);
+      await fullSync();
+      return;
+    }
+
+    // Compare and delete unauthorized records
+    await db.writeTransaction((tx) async {
+      for (final shadowEntry in shadowTables) {
+        final tableName = shadowEntry['entity_name'] as String;
+
+        // Find records that exist in original but not in shadow (and are synced)
+        final toDelete = await tx.getAll('''
+          SELECT _id FROM "$tableName" 
+          WHERE _id NOT IN (SELECT _id FROM "${tableName}_shadow")
+          AND is_unsynced = 0
+        ''');
+
+        if (kDebugMode && toDelete.isNotEmpty) {
+          print('[RulesBoard] Deleting ${toDelete.length} unauthorized records from $tableName');
+        }
+
+        // Delete unauthorized records
+        for (final record in toDelete) {
+          await tx.execute('DELETE FROM "$tableName" WHERE _id = ?', [record['_id']]);
+        }
+
+        // Step 8: Reset last_received_ts in original syncing_table
+        await tx.execute(
+          'UPDATE syncing_table SET last_received_ts = NULL WHERE entity_name = ?',
+          [tableName],
+        );
+      }
+    });
+
+    // Step 9: Drop shadow tables
+    await _dropShadowTables(db, shadowTables);
+
+    // Step 10: Call full resync
+    if (kDebugMode) {
+      print('[RulesBoard] Shadow sync complete, triggering full sync');
+    }
+    await fullSync();
+  }
+
+  Future<void> _dropShadowTables(SqliteDatabase db, List<Map<String, dynamic>> shadowTables) async {
+    await db.writeTransaction((tx) async {
+      // Drop entity shadow tables
+      for (final shadowEntry in shadowTables) {
+        final tableName = shadowEntry['entity_name'] as String;
+        await tx.execute('DROP TABLE IF EXISTS "${tableName}_shadow"');
+      }
+      // Drop shadow syncing_table
+      await tx.execute('DROP TABLE IF EXISTS syncing_table_shadow');
+    });
   }
 
   Future<void> _sendUnsynced({required ResultSet syncingTables}) async {

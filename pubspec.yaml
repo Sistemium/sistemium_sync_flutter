@@ -1,17 +1,17 @@
 name: sistemium_sync_flutter
-version: 1.7.9
+version: 1.8.0
 environment:
-  sdk: ^3.8.0
-  flutter: ">=3.29.3"
+  sdk: ^3.8.1
+  flutter: ">=3.32.8"
 dependencies:
   flutter:
     sdk: flutter
-  http: 1.4.0
-  sqlite_async: 0.11.7
+  http: 1.5.0-beta.2
+  sqlite_async: 0.11.8
   path_provider: 2.1.5
   objectid: 4.0.1
-  collection: ^1.18.0
-  path: ^1.9.0
+  collection: 1.19.1
+  path: 1.9.1
 dev_dependencies:
   flutter_test:
     sdk: flutter
