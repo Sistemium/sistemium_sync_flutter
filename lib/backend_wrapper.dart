@@ -559,8 +559,19 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
             [syncingEntry[0]['_id'], table],
           );
 
-          // Create shadow table for entity
-          await tx.execute('CREATE TABLE IF NOT EXISTS "${table}_shadow" AS SELECT * FROM "$table" WHERE 0');
+          // Create shadow table for entity with proper structure
+          // First get the table structure
+          final tableInfo = await tx.getAll('PRAGMA table_info("$table")');
+          final columns = tableInfo.map((col) {
+            final name = col['name'];
+            final type = col['type'];
+            final notNull = col['notnull'] == 1 ? 'NOT NULL' : '';
+            final pk = col['pk'] == 1 ? 'PRIMARY KEY' : '';
+            return '"$name" $type $notNull $pk';
+          }).join(', ');
+          
+          await tx.execute('DROP TABLE IF EXISTS "${table}_shadow"');
+          await tx.execute('CREATE TABLE "${table}_shadow" ($columns)');
         }
       }
 
