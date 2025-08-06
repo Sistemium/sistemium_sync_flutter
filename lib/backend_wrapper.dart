@@ -696,7 +696,7 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
       return;
     }
 
-    // Compare and delete unauthorized records
+    // Replace original tables with shadow tables
     await db.writeTransaction((tx) async {
       for (final shadowEntry in shadowTables) {
         final tableName = shadowEntry['entity_name'] as String;
@@ -708,27 +708,50 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
           print('[RulesBoard] $tableName - Original: ${originalCount[0]['count']} records, Shadow: ${shadowCount[0]['count']} records');
         }
 
-        // Find records that exist in original but not in shadow (and are synced)
-        final toDelete = await tx.getAll('''
-          SELECT _id FROM "$tableName" 
-          WHERE _id NOT IN (SELECT _id FROM "${tableName}_shadow")
-          AND is_unsynced = 0
+        // Check for unsynced data one more time in this specific table
+        final unsyncedCheck = await tx.getAll(
+          'SELECT 1 FROM "$tableName" WHERE is_unsynced = 1 LIMIT 1'
+        );
+        
+        if (unsyncedCheck.isNotEmpty) {
+          if (kDebugMode) {
+            print('[RulesBoard] Found unsynced data in $tableName, skipping truncate for this table');
+          }
+          continue;
+        }
+
+        // Truncate original table
+        if (kDebugMode) {
+          print('[RulesBoard] Truncating $tableName and copying from shadow');
+        }
+        await tx.execute('DELETE FROM "$tableName"');
+        
+        // Copy all data from shadow to original
+        final columns = await tx.getAll('PRAGMA table_info("$tableName")');
+        final columnNames = columns.map((c) => '"${c['name']}"').join(', ');
+        
+        await tx.execute('''
+          INSERT INTO "$tableName" ($columnNames)
+          SELECT $columnNames FROM "${tableName}_shadow"
         ''');
 
-        if (kDebugMode) {
-          print('[RulesBoard] Found ${toDelete.length} records to delete from $tableName');
-        }
-
-        // Delete unauthorized records
-        for (final record in toDelete) {
-          await tx.execute('DELETE FROM "$tableName" WHERE _id = ?', [record['_id']]);
-        }
-
-        // Step 8: Reset last_received_ts in original syncing_table
-        await tx.execute(
-          'UPDATE syncing_table SET last_received_ts = NULL WHERE entity_name = ?',
-          [tableName],
+        // Update syncing_table with last_received_ts from shadow
+        final shadowSyncInfo = await tx.getAll(
+          'SELECT last_received_ts FROM syncing_table_shadow WHERE entity_name = ?',
+          [tableName]
         );
+        
+        if (shadowSyncInfo.isNotEmpty) {
+          final shadowTs = shadowSyncInfo[0]['last_received_ts'];
+          await tx.execute(
+            'UPDATE syncing_table SET last_received_ts = ? WHERE entity_name = ?',
+            [shadowTs, tableName],
+          );
+          
+          if (kDebugMode) {
+            print('[RulesBoard] Updated $tableName last_received_ts to: $shadowTs');
+          }
+        }
       }
     });
 
