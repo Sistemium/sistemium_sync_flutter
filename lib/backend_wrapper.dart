@@ -724,7 +724,9 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
         if (kDebugMode) {
           print('[RulesBoard] Truncating $tableName and copying from shadow');
         }
-        await tx.execute('DELETE FROM "$tableName"');
+        // Workaround: SQLite watch stream bug - DELETE without WHERE clause doesn't trigger watch
+        // Adding WHERE 1=1 ensures the watch stream is notified of the deletion
+        await tx.execute('DELETE FROM "$tableName" WHERE 1=1');
         
         // Copy all data from shadow to original
         final columns = await tx.getAll('PRAGMA table_info("$tableName")');
