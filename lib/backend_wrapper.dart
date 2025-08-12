@@ -254,6 +254,9 @@ class BackendNotifier extends ChangeNotifier {
       return;
     }
     fullSyncStarted = true;
+    
+    do {
+      repeat = false;
     try {
       final tables = await _db!.getAll('select * from syncing_table');
       await _sendUnsynced(syncingTables: tables);
@@ -331,16 +334,13 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
       }
     }
 
-    fullSyncStarted = false;
-
-    if (repeat) {
-      repeat = false;
-      await fullSync();
-    }
-
-    // After regular sync flow, process Archive entries first, then RulesBoard.
+    // Process Archive and RulesBoard as part of the sync flow, before releasing the lock
     await _processArchive();
     await _processRulesBoard();
+    
+    } while (repeat && _db != null);
+    
+    fullSyncStarted = false;
   }
 
   // -----------------------------------------------------------------------
@@ -429,9 +429,9 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
 
     if (needRepeat) {
       if (kDebugMode) {
-        print('[Archive] Processing aborted due to unsynced data, triggering another sync.');
+        print('[Archive] Processing aborted due to unsynced data, will repeat sync.');
       }
-      await fullSync();
+      repeat = true;
     } else if (kDebugMode) {
       print('[Archive] Processing complete.');
     }
@@ -454,9 +454,9 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
     final hasUnsyncedData = await _hasAnyUnsyncedData(dbLocal);
     if (hasUnsyncedData) {
       if (kDebugMode) {
-        print('[RulesBoard] Unsynced data exists, triggering sync first.');
+        print('[RulesBoard] Unsynced data exists, will repeat sync.');
       }
-      await fullSync();
+      repeat = true;
       return;
     }
 
@@ -692,7 +692,7 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
       }
       // Drop all shadow tables
       await _dropShadowTables(db, shadowTables);
-      await fullSync();
+      repeat = true;
       return;
     }
 
@@ -762,9 +762,9 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
 
     // Step 10: Call full resync
     if (kDebugMode) {
-      print('[RulesBoard] Shadow sync complete, triggering full sync');
+      print('[RulesBoard] Shadow sync complete, will repeat sync');
     }
-    await fullSync();
+    repeat = true;
   }
 
   Future<void> _dropShadowTables(SqliteDatabase db, List<Map<String, dynamic>> shadowTables) async {
