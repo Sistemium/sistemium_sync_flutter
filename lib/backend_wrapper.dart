@@ -268,16 +268,21 @@ class BackendNotifier extends ChangeNotifier {
         int page = 1000;
         bool more = true;
         String? ts = table['last_received_ts']?.toString() ?? '';
+        developer.log('Initial TS for ${table['entity_name']}: $ts', name: 'SYNC');
         while (more && _db != null) {
+          developer.log('Fetching ${table['entity_name']} with ts: $ts, page: $page', name: 'SYNC');
           await _fetchData(
             name: table['entity_name'],
             lastReceivedTs: ts,
             pageSize: page,
             onData: (resp) async {
+              developer.log('Got response for ${table['entity_name']}, starting transaction', name: 'SYNC');
               await _db!.writeTransaction((tx) async {
+                developer.log('Checking unsynced in ${table['entity_name']}', name: 'SYNC');
                 final unsynced = await tx.getAll(
                   'select * from ${table['entity_name']} where is_unsynced = 1',
                 );
+                developer.log('Unsynced check complete for ${table['entity_name']}: ${unsynced.length} records', name: 'SYNC');
                 if (unsynced.isNotEmpty) {
                   developer.log('Found ${unsynced.length} unsynced records in ${table['entity_name']}', name: 'SYNC');
                   developer.log('First unsynced: ${unsynced.first}', name: 'SYNC');
@@ -327,7 +332,9 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
               });
             },
           );
+          developer.log('Fetch complete for ${table['entity_name']}, more: $more', name: 'SYNC');
         }
+        developer.log('Table ${table['entity_name']} sync complete', name: 'SYNC');
       }
     } catch (e, stackTrace) {
       developer.log('Error during full sync: $e', name: 'SYNC', error: e, stackTrace: stackTrace);
