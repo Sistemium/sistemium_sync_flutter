@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:developer' as developer;
 import 'dart:io';
 import 'package:collection/collection.dart';
 import 'package:flutter/foundation.dart' show kIsWeb, kDebugMode;
@@ -96,8 +97,7 @@ class BackendNotifier extends ChangeNotifier {
       );
     } catch (e, st) {
       if (kDebugMode) {
-        print('Error ensuring $tableName registration: $e');
-        print(st);
+        developer.log('Error ensuring $tableName registration: $e', name: 'SYNC', error: e, stackTrace: st);
       }
       _scheduleTableRetry(db, tableName);
     }
@@ -119,7 +119,7 @@ class BackendNotifier extends ChangeNotifier {
         return body['ts'] as String?;
       }
     } catch (e) {
-      if (kDebugMode) print('$tableName TS request failed: $e');
+      developer.log('$tableName TS request failed: $e', name: 'SYNC', error: e);
     }
     return null;
   }
@@ -257,10 +257,14 @@ class BackendNotifier extends ChangeNotifier {
     
     do {
       repeat = false;
+      developer.log('Starting sync cycle', name: 'SYNC');
     try {
       final tables = await _db!.getAll('select * from syncing_table');
+      developer.log('Found ${tables.length} tables to sync', name: 'SYNC');
+      developer.log('Tables: ${tables.map((t) => t['entity_name']).join(', ')}', name: 'SYNC');
       await _sendUnsynced(syncingTables: tables);
       for (var table in tables) {
+        developer.log('Processing table: ${table['entity_name']}', name: 'SYNC');
         int page = 1000;
         bool more = true;
         String? ts = table['last_received_ts']?.toString() ?? '';
@@ -275,16 +279,16 @@ class BackendNotifier extends ChangeNotifier {
                   'select * from ${table['entity_name']} where is_unsynced = 1',
                 );
                 if (unsynced.isNotEmpty) {
+                  developer.log('Found ${unsynced.length} unsynced records in ${table['entity_name']}', name: 'SYNC');
+                  developer.log('First unsynced: ${unsynced.first}', name: 'SYNC');
                   more = false;
                   //todo: might there be infinite loop, perhaps we need to log something to sentry for debug purposes
                   repeat = true;
                   return;
                 }
-                if (kDebugMode) {
-                  print('Syncing ${table['entity_name']}');
-                  print('Last received TS: $ts');
-                  print('Received ${resp['data']?.length ?? 0} rows');
-                }
+                developer.log('Syncing ${table['entity_name']}', name: 'SYNC');
+                developer.log('Last received TS: $ts', name: 'SYNC');
+                developer.log('Received ${resp['data']?.length ?? 0} rows', name: 'SYNC');
                 if ((resp['data']?.length ?? 0) == 0) {
                   more = false;
                   return;
@@ -304,9 +308,7 @@ INSERT INTO $name (${cols.join(', ')}) VALUES ($placeholders)
 ON CONFLICT($pk) DO UPDATE SET $updates;
 ''';
                 final data = List<Map<String, dynamic>>.from(resp['data']);
-                if (kDebugMode) {
-                  print('Last ts in response: ${data.last['ts']}');
-                }
+                developer.log('Last ts in response: ${data.last['ts']}', name: 'SYNC');
                 final batch = data
                     .map<List<Object?>>(
                       (e) => cols.map<Object?>((c) => e[c]).toList(),
@@ -328,18 +330,20 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
         }
       }
     } catch (e, stackTrace) {
-      if (kDebugMode) {
-        print('Error during full sync: $e');
-        print(stackTrace);
-      }
+      developer.log('Error during full sync: $e', name: 'SYNC', error: e, stackTrace: stackTrace);
     }
 
     // Process Archive and RulesBoard as part of the sync flow, before releasing the lock
+    developer.log('About to process Archive', name: 'SYNC');
     await _processArchive();
+    developer.log('About to process RulesBoard', name: 'SYNC');
     await _processRulesBoard();
+    developer.log('Finished processing Archive and RulesBoard', name: 'SYNC');
     
+    developer.log('End of sync cycle, repeat=$repeat', name: 'SYNC');
     } while (repeat && _db != null);
     
+    developer.log('Sync loop complete, setting fullSyncStarted to false', name: 'SYNC');
     fullSyncStarted.value = false;
   }
 
@@ -352,9 +356,7 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
     final dbLocal = _db;
     if (dbLocal == null) return;
 
-    if (kDebugMode) {
-      print('[Archive] Starting processing...');
-    }
+    developer.log('Starting processing...', name: 'Archive');
 
     bool needRepeat = false;
 
@@ -366,7 +368,7 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
 
       if (unsyncedArchive.isNotEmpty) {
         if (kDebugMode) {
-          print('[Archive] Unsynced Archive data exists, aborting processing.');
+          developer.log('Unsynced Archive data exists, aborting processing.', name: 'Archive');
         }
         needRepeat = true;
         return; // abort processing
@@ -377,14 +379,14 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
         'select * from Archive order by ts asc',
       );
       if (kDebugMode) {
-        print('[Archive] Found ${archiveEntries.length} entries.');
+        developer.log('Found ${archiveEntries.length} entries.', name: 'Archive');
       }
       if (archiveEntries.isEmpty) return; // nothing to process
 
       // Process each Archive entry
       for (var entry in archiveEntries) {
         if (kDebugMode) {
-          print('[Archive] Processing entry: ${entry['_id']}');
+          developer.log('Processing entry: ${entry['_id']}', name: 'Archive');
         }
 
         final entityName = entry['name'];
@@ -392,7 +394,7 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
 
         if (entityName == null || entityId == null) {
           if (kDebugMode) {
-            print('[Archive] Skipping malformed entry: missing name or id');
+            developer.log('Skipping malformed entry: missing name or id', name: 'Archive');
           }
           continue;
         }
@@ -405,13 +407,13 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
 
         if (tableExists.isEmpty) {
           if (kDebugMode) {
-            print('[Archive] Skipping delete for $entityName - table not in syncing_table');
+            developer.log('Skipping delete for $entityName - table not in syncing_table', name: 'Archive');
           }
           continue;
         }
 
         if (kDebugMode) {
-          print('[Archive] Deleting $entityId from $entityName');
+          developer.log('Deleting $entityId from $entityName', name: 'Archive');
         }
 
         // Delete the referenced document if it exists
@@ -421,7 +423,7 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
       // After processing all entries, clear the Archive table
       if (archiveEntries.isNotEmpty) {
         if (kDebugMode) {
-          print('[Archive] Clearing local Archive table.');
+          developer.log('Clearing local Archive table.', name: 'Archive');
         }
         await tx.execute('DELETE FROM Archive');
       }
@@ -429,11 +431,11 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
 
     if (needRepeat) {
       if (kDebugMode) {
-        print('[Archive] Processing aborted due to unsynced data, will repeat sync.');
+        developer.log('Processing aborted due to unsynced data, will repeat sync.', name: 'Archive');
       }
       repeat = true;
     } else if (kDebugMode) {
-      print('[Archive] Processing complete.');
+      developer.log('Processing complete.', name: 'Archive');
     }
   }
 
@@ -446,16 +448,12 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
     final dbLocal = _db;
     if (dbLocal == null) return;
 
-    if (kDebugMode) {
-      print('[RulesBoard] Starting processing...');
-    }
+    developer.log('Starting processing...', name: 'RulesBoard');
 
     // Step 1-2: Ensure everything is synced before processing
     final hasUnsyncedData = await _hasAnyUnsyncedData(dbLocal);
     if (hasUnsyncedData) {
-      if (kDebugMode) {
-        print('[RulesBoard] Unsynced data exists, will repeat sync.');
-      }
+      developer.log('Unsynced data exists, will repeat sync.', name: 'RulesBoard');
       repeat = true;
       return;
     }
@@ -466,9 +464,7 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
     );
 
     if (shadowSyncingExists.isNotEmpty) {
-      if (kDebugMode) {
-        print('[RulesBoard] Found existing shadow tables, resuming resync...');
-      }
+      developer.log('Found existing shadow tables, resuming resync...', name: 'RulesBoard');
       // Jump to step 6 - process shadow syncing table
       await _processShadowSync(dbLocal);
       return;
@@ -480,9 +476,7 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
     );
 
     if (rulesEntries.isEmpty) {
-      if (kDebugMode) {
-        print('[RulesBoard] No entries to process.');
-      }
+      developer.log('No entries to process.', name: 'RulesBoard');
       return;
     }
 
@@ -505,9 +499,7 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
   }
 
   Future<void> _processRulesBoardEntry(SqliteDatabase db, Map<String, dynamic> entry) async {
-    if (kDebugMode) {
-      print('[RulesBoard] Processing entry: $entry');
-    }
+    developer.log('Processing entry: $entry', name: 'RulesBoard');
 
     final jsonStr = entry['fullResyncCollections'];
     if (jsonStr == null) return;
@@ -517,9 +509,7 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
       final decoded = jsonDecode(jsonStr);
       tablesToResync = (decoded as List).whereType<String>().toList();
     } catch (_) {
-      if (kDebugMode) {
-        print('[RulesBoard] Failed to parse fullResyncCollections');
-      }
+      developer.log('Failed to parse fullResyncCollections', name: 'RulesBoard');
       return;
     }
 
@@ -529,9 +519,7 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
     ).toList();
 
     if (tablesToResync.isEmpty) {
-      if (kDebugMode) {
-        print('[RulesBoard] No user tables to resync');
-      }
+      developer.log('No user tables to resync', name: 'RulesBoard');
       return;
     }
 
@@ -585,7 +573,7 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
 
   Future<void> _processShadowSync(SqliteDatabase db) async {
     if (kDebugMode) {
-      print('[RulesBoard] Processing shadow sync...');
+      developer.log('Processing shadow sync...', name: 'RulesBoard');
     }
 
     // Get tables to sync from shadow syncing_table
@@ -596,7 +584,7 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
       final lastTs = shadowEntry['last_received_ts'] as String?;
 
       if (kDebugMode) {
-        print('[RulesBoard] Syncing shadow table: $tableName from ts: $lastTs');
+        developer.log('Syncing shadow table: $tableName from ts: $lastTs', name: 'RulesBoard');
       }
 
       // Download data into shadow table using existing sync logic
@@ -613,7 +601,7 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
     String? currentTs = initialTs ?? '';  // Convert null to empty string like normal sync does
 
     if (kDebugMode) {
-      print('[RulesBoard] Starting shadow sync for $tableName with initialTs: $initialTs (using: $currentTs)');
+      developer.log('Starting shadow sync for $tableName with initialTs: $initialTs (using: $currentTs)', name: 'RulesBoard');
     }
 
     while (hasMore && _db != null) {
@@ -627,7 +615,7 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
               final data = List<Map<String, dynamic>>.from(resp['data'] ?? []);
               
               if (kDebugMode) {
-                print('[RulesBoard] Shadow sync $tableName: received ${data.length} records');
+                developer.log('Shadow sync $tableName: received ${data.length} records', name: 'RulesBoard');
               }
               
               if (data.isEmpty) {
@@ -676,7 +664,7 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
         if (!hasMore) break;
       } catch (e) {
         if (kDebugMode) {
-          print('[RulesBoard] Error syncing shadow table $tableName: $e');
+          developer.log('Error syncing shadow table $tableName: $e', name: 'RulesBoard', error: e);
         }
         rethrow;
       }
@@ -688,7 +676,7 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
     final hasNewUnsyncedData = await _hasAnyUnsyncedData(db);
     if (hasNewUnsyncedData) {
       if (kDebugMode) {
-        print('[RulesBoard] New unsynced data appeared during shadow sync, dropping shadow tables and doing full sync');
+        developer.log('New unsynced data appeared during shadow sync, dropping shadow tables and doing full sync', name: 'RulesBoard');
       }
       // Drop all shadow tables
       await _dropShadowTables(db, shadowTables);
@@ -705,7 +693,7 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
           // Debug: count records in both tables
           final originalCount = await tx.getAll('SELECT COUNT(*) as count FROM "$tableName"');
           final shadowCount = await tx.getAll('SELECT COUNT(*) as count FROM "${tableName}_shadow"');
-          print('[RulesBoard] $tableName - Original: ${originalCount[0]['count']} records, Shadow: ${shadowCount[0]['count']} records');
+          developer.log('$tableName - Original: ${originalCount[0]['count']} records, Shadow: ${shadowCount[0]['count']} records', name: 'RulesBoard');
         }
 
         // Check for unsynced data one more time in this specific table
@@ -715,14 +703,14 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
         
         if (unsyncedCheck.isNotEmpty) {
           if (kDebugMode) {
-            print('[RulesBoard] Found unsynced data in $tableName, skipping truncate for this table');
+            developer.log('Found unsynced data in $tableName, skipping truncate for this table', name: 'RulesBoard');
           }
           continue;
         }
 
         // Truncate original table
         if (kDebugMode) {
-          print('[RulesBoard] Truncating $tableName and copying from shadow');
+          developer.log('Truncating $tableName and copying from shadow', name: 'RulesBoard');
         }
         // Workaround: SQLite watch stream bug - DELETE without WHERE clause doesn't trigger watch
         // Adding WHERE 1=1 ensures the watch stream is notified of the deletion
@@ -751,7 +739,7 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
           );
           
           if (kDebugMode) {
-            print('[RulesBoard] Updated $tableName last_received_ts to: $shadowTs');
+            developer.log('Updated $tableName last_received_ts to: $shadowTs', name: 'RulesBoard');
           }
         }
       }
@@ -762,7 +750,7 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
 
     // Step 10: Call full resync
     if (kDebugMode) {
-      print('[RulesBoard] Shadow sync complete, will repeat sync');
+      developer.log('Shadow sync complete, will repeat sync', name: 'RulesBoard');
     }
     repeat = true;
   }
@@ -860,7 +848,7 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
               },
               onError: (e) {
                 if (kDebugMode) {
-                  print('SSE error: $e');
+                  developer.log('SSE error: $e', name: 'SSE', error: e);
                   handleError();
                 }
               },
@@ -870,7 +858,7 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
       }
     } catch (e) {
       if (kDebugMode) {
-        print('Error starting SSE: $e');
+        developer.log('Error starting SSE: $e', name: 'SSE', error: e);
       }
       handleError();
     }
