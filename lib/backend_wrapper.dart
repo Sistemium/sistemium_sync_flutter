@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'dart:developer' as developer;
 import 'dart:io';
 import 'package:collection/collection.dart';
-import 'package:flutter/foundation.dart' show kIsWeb, kDebugMode;
+import 'package:flutter/foundation.dart' show kIsWeb, kDebugMode, compute;
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:objectid/objectid.dart';
@@ -35,6 +35,11 @@ class BackendNotifier extends ChangeNotifier {
   });
 
   SqliteDatabase? get db => _db;
+
+  // Single helper for JSON parsing in isolate
+  static Map<String, dynamic> _parseJsonInIsolate(String body) {
+    return jsonDecode(body) as Map<String, dynamic>;
+  }
 
   Future<void> initDb({
     String? serverUrl,
@@ -237,7 +242,7 @@ class BackendNotifier extends ChangeNotifier {
 
     final res = await http.get(uri, headers: headers);
     if (res.statusCode == 200) {
-      final data = jsonDecode(res.body);
+      final data = await compute(_parseJsonInIsolate, res.body);
       await onData(data);
     } else {
       throw Exception('Failed to fetch data');
