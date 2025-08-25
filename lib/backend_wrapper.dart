@@ -268,7 +268,7 @@ class BackendNotifier extends ChangeNotifier {
       await _sendUnsynced(syncingTables: tables);
       for (var table in tables) {
         SyncLogger.log('Processing table: ${table['entity_name']}');
-        int page = 1000;
+        int page = 10000;
         bool more = true;
         String? ts = table['last_received_ts']?.toString() ?? '';
         SyncLogger.log('Initial TS for ${table['entity_name']}: $ts');
