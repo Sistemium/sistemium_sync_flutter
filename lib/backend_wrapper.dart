@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:developer' as developer;
 import 'dart:io';
 import 'package:collection/collection.dart';
 import 'package:flutter/foundation.dart' show kIsWeb, kDebugMode, compute;
@@ -10,6 +9,7 @@ import 'package:objectid/objectid.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:sistemium_sync_flutter/sync_abstract.dart';
+import 'package:sistemium_sync_flutter/sync_logger.dart';
 import 'package:sqlite_async/sqlite3.dart';
 import 'package:sqlite_async/sqlite3_common.dart';
 import 'package:sqlite_async/sqlite_async.dart';
@@ -101,9 +101,7 @@ class BackendNotifier extends ChangeNotifier {
         [ObjectId().hexString, tableName, latestTs],
       );
     } catch (e, st) {
-      if (kDebugMode) {
-        developer.log('Error ensuring $tableName registration: $e', name: 'SYNC', error: e, stackTrace: st);
-      }
+      SyncLogger.log('Error ensuring $tableName registration: $e', name: 'SYNC', error: e, stackTrace: st);
       _scheduleTableRetry(db, tableName);
     }
   }
@@ -124,7 +122,7 @@ class BackendNotifier extends ChangeNotifier {
         return body['ts'] as String?;
       }
     } catch (e) {
-      developer.log('$tableName TS request failed: $e', name: 'SYNC', error: e);
+      SyncLogger.log('$tableName TS request failed: $e', name: 'SYNC', error: e);
     }
     return null;
   }
@@ -262,7 +260,7 @@ class BackendNotifier extends ChangeNotifier {
     
     do {
       repeat = false;
-      developer.log('Starting sync cycle', name: 'SYNC');
+      SyncLogger.log('Starting sync cycle', name: 'SYNC');
     try {
       final tables = await _db!.getAll('select * from syncing_table');
       developer.log('Found ${tables.length} tables to sync', name: 'SYNC');
