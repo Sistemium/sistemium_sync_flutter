@@ -13,7 +13,6 @@ class SyncLogger {
   /// Single logging method
   static void log(
     String message, {
-    String? name,
     Object? error,
     StackTrace? stackTrace,
   }) {
@@ -33,10 +32,6 @@ class SyncLogger {
     final buffer = StringBuffer();
     buffer.write('[$timeStr] ');
     
-    if (name != null) {
-      buffer.write('[$name] ');
-    }
-    
     // Add file and line info
     if (callerInfo != null) {
       buffer.write('[${callerInfo.file}:${callerInfo.line}] ');
@@ -47,7 +42,7 @@ class SyncLogger {
     // Use developer.log for output
     developer.log(
       buffer.toString(),
-      name: name ?? 'SYNC',
+      name: 'SYNC',
       error: error,
       stackTrace: stackTrace,
     );
