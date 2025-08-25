@@ -266,23 +266,20 @@ class BackendNotifier extends ChangeNotifier {
       SyncLogger.log('Found ${tables.length} tables to sync');
       SyncLogger.log('Tables: ${tables.map((t) => t['entity_name']).join(', ')}');
       await _sendUnsynced(syncingTables: tables);
-      
-      // Process all tables in parallel
-      await Future.wait(
-        tables.map((table) async {
-          SyncLogger.log('Processing table: ${table['entity_name']}');
-          int page = 10000;
-          bool more = true;
-          String? ts = table['last_received_ts']?.toString() ?? '';
-          SyncLogger.log('Initial TS for ${table['entity_name']}: $ts');
-          while (more && _db != null) {
-            SyncLogger.log('Fetching ${table['entity_name']} with ts: $ts, page: $page');
-            await _fetchData(
-              name: table['entity_name'],
-              lastReceivedTs: ts,
-              pageSize: page,
-              onData: (resp) async {
-                SyncLogger.log('Got response for ${table['entity_name']}, starting transaction');
+      for (var table in tables) {
+        SyncLogger.log('Processing table: ${table['entity_name']}');
+        int page = 10000;
+        bool more = true;
+        String? ts = table['last_received_ts']?.toString() ?? '';
+        SyncLogger.log('Initial TS for ${table['entity_name']}: $ts');
+        while (more && _db != null) {
+          SyncLogger.log('Fetching ${table['entity_name']} with ts: $ts, page: $page');
+          await _fetchData(
+            name: table['entity_name'],
+            lastReceivedTs: ts,
+            pageSize: page,
+            onData: (resp) async {
+              SyncLogger.log('Got response for ${table['entity_name']}, starting transaction');
               await _db!.writeTransaction((tx) async {
                 SyncLogger.log('Checking unsynced in ${table['entity_name']}');
                 final unsynced = await tx.getAll(
@@ -341,8 +338,7 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
           SyncLogger.log('Fetch complete for ${table['entity_name']}, more: $more');
         }
         SyncLogger.log('Table ${table['entity_name']} sync complete');
-      }).toList(),
-    );
+      }
     } catch (e, stackTrace) {
       SyncLogger.log('Error during full sync: $e', error: e, stackTrace: stackTrace);
     }
