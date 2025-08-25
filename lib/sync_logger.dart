@@ -1,4 +1,3 @@
-import 'dart:developer' as developer;
 import 'package:flutter/foundation.dart';
 
 /// Centralized logging system for Sistemium Sync Flutter library
@@ -39,13 +38,16 @@ class SyncLogger {
     
     buffer.write(message);
     
-    // Use developer.log for output
-    developer.log(
-      buffer.toString(),
-      name: 'SYNC',
-      error: error,
-      stackTrace: stackTrace,
-    );
+    // Use print for output (only in debug mode)
+    print(buffer.toString());
+    
+    // Print error and stack trace if provided
+    if (error != null) {
+      print('Error: $error');
+      if (stackTrace != null) {
+        print('Stack trace:\n$stackTrace');
+      }
+    }
   }
   
   /// Extract caller information from stack trace
