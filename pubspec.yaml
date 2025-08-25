@@ -1,5 +1,5 @@
 name: sistemium_sync_flutter
-version: 1.9.6
+version: 1.9.7
 environment:
   sdk: 3.9.0
   flutter: ">=3.32.8"
