@@ -1,3 +1,10 @@
+## 2.0.2
+
+* Fixed RulesBoard registration for empty collections
+* Improved error handling to distinguish between server errors and empty collections
+* Empty collections now register with null timestamp instead of throwing exception
+* Added retry logic only for actual server/network errors
+
 ## 1.6.0
 
 * **BREAKING CHANGE**: Renamed timestamp field from `lts` to `ts`
