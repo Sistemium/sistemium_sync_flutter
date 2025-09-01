@@ -91,15 +91,21 @@ class BackendNotifier extends ChangeNotifier {
         return;
       }
 
-      final latestTs = await _requestLatestTableTs(tableName);
-      if (latestTs == null) {
-        throw Exception('Failed to get $tableName timestamp');
+      final result = await _requestLatestTableTs(tableName);
+      
+      // If server request failed (network error, auth error, etc), schedule retry
+      if (result.hasError) {
+        SyncLogger.log('Failed to get $tableName timestamp from server: ${result.error}', error: result.error);
+        _scheduleTableRetry(db, tableName);
+        return;
       }
 
+      // Server responded successfully - register with the timestamp (which can be null for empty collections)
       await db.execute(
         'INSERT INTO syncing_table (_id, entity_name, last_received_ts) VALUES (?, ?, ?)',
-        [ObjectId().hexString, tableName, latestTs],
+        [ObjectId().hexString, tableName, result.timestamp],
       );
+      SyncLogger.log('Successfully registered $tableName with ts: ${result.timestamp}');
     } catch (e, st) {
       SyncLogger.log('Error ensuring $tableName registration: $e', error: e, stackTrace: st);
       _scheduleTableRetry(db, tableName);
@@ -107,8 +113,11 @@ class BackendNotifier extends ChangeNotifier {
   }
 
 
-  Future<String?> _requestLatestTableTs(String tableName) async {
-    if (_serverUrl == null) return null;
+  Future<_TimestampResult> _requestLatestTableTs(String tableName) async {
+    if (_serverUrl == null) {
+      return _TimestampResult(hasError: true, error: 'Server URL not configured');
+    }
+    
     try {
       final uri = Uri.parse('$_serverUrl/latest-ts').replace(queryParameters: {'name': tableName});
       final headers = {'appid': abstractSyncConstants.appId};
@@ -117,14 +126,28 @@ class BackendNotifier extends ChangeNotifier {
       }
 
       final res = await http.get(uri, headers: headers);
+      
       if (res.statusCode == 200) {
         final body = jsonDecode(res.body);
-        return body['ts'] as String?;
+        // Successfully got response - timestamp can be null if collection is empty
+        return _TimestampResult(
+          hasError: false,
+          timestamp: body['ts'] as String?,
+        );
+      } else {
+        // Server responded with error status
+        return _TimestampResult(
+          hasError: true,
+          error: 'Server returned status ${res.statusCode}',
+        );
       }
     } catch (e) {
-      SyncLogger.log('$tableName TS request failed: $e', error: e);
+      // Network or other error
+      return _TimestampResult(
+        hasError: true,
+        error: e.toString(),
+      );
     }
-    return null;
   }
 
   void _scheduleTableRetry(SqliteDatabase db, String tableName) {
@@ -892,4 +915,16 @@ class BackendWrapper extends InheritedNotifier<BackendNotifier> {
 
   static BackendNotifier? of(BuildContext context) =>
       context.dependOnInheritedWidgetOfExactType<BackendWrapper>()?.notifier;
+}
+
+class _TimestampResult {
+  final bool hasError;
+  final String? timestamp;
+  final String? error;
+
+  _TimestampResult({
+    required this.hasError,
+    this.timestamp,
+    this.error,
+  });
 }
