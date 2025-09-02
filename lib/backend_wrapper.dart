@@ -191,6 +191,14 @@ class BackendNotifier extends ChangeNotifier {
     }
   }
 
+  Future<T> writeTransaction<T>(Future<T> Function(SqliteWriteContext tx) callback) async {
+    if (_db == null) throw Exception('Database not initialized');
+    final result = await _db!.writeTransaction(callback);
+    // Automatically trigger fullSync after transaction completes
+    fullSync();
+    return result;
+  }
+
   Future<void> delete({required String tableName, required String id}) async {
     await _db!.writeTransaction((tx) async {
       // First get the document data before deleting
