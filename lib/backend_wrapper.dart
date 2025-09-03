@@ -278,16 +278,16 @@ class BackendNotifier extends ChangeNotifier {
     }
   }
 
-  final ValueNotifier<bool> fullSyncStarted = ValueNotifier<bool>(false);
+  final ValueNotifier<bool> syncStarted = ValueNotifier<bool>(false);
   bool repeat = false;
 
   //todo: sometimes we need to sync only one table, not all
   Future<void> fullSync() async {
-    if (fullSyncStarted.value) {
+    if (syncStarted.value) {
       repeat = true;
       return;
     }
-    fullSyncStarted.value = true;
+    syncStarted.value = true;
     
     do {
       repeat = false;
@@ -384,8 +384,8 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
     SyncLogger.log('End of sync cycle, repeat=$repeat');
     } while (repeat && _db != null);
     
-    SyncLogger.log('Sync loop complete, setting fullSyncStarted to false');
-    fullSyncStarted.value = false;
+    SyncLogger.log('Sync loop complete, setting syncStarted to false');
+    syncStarted.value = false;
   }
 
   // -----------------------------------------------------------------------
@@ -907,7 +907,7 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
   
   @override
   void dispose() {
-    fullSyncStarted.dispose();
+    syncStarted.dispose();
     _eventSubscription?.cancel();
     _db?.close();
     super.dispose();
