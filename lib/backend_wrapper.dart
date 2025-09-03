@@ -213,15 +213,22 @@ class BackendNotifier extends ChangeNotifier {
     ''';
     await db!.execute(sql, [...values, ...values]);
     if (tx == null) {
-      _addToSyncQueue(SyncQueueItem(method: 'fullSync'));
+      _addToSyncQueue(SyncQueueItem(method: 'sendUnsynced', arguments: {'tableName': tableName}));
     }
   }
 
-  Future<T> writeTransaction<T>(Future<T> Function(SqliteWriteContext tx) callback) async {
+  Future<T> writeTransaction<T>({
+    required List<String> affectedTables,
+    required Future<T> Function(SqliteWriteContext tx) callback,
+  }) async {
     if (_db == null) throw Exception('Database not initialized');
     final result = await _db!.writeTransaction(callback);
-    // Automatically trigger fullSync after transaction completes
-    _addToSyncQueue(SyncQueueItem(method: 'fullSync'));
+    
+    // Queue sync for each affected table
+    for (final tableName in affectedTables) {
+      _addToSyncQueue(SyncQueueItem(method: 'sendUnsynced', arguments: {'tableName': tableName}));
+    }
+    
     return result;
   }
 
@@ -253,7 +260,8 @@ class BackendNotifier extends ChangeNotifier {
       );
     });
 
-    _addToSyncQueue(SyncQueueItem(method: 'fullSync'));
+    // Only need to sync Archive table since it has the new unsynced entry
+    _addToSyncQueue(SyncQueueItem(method: 'sendUnsynced', arguments: {'tableName': 'Archive'}));
   }
 
   Future<SqliteDatabase> _openDatabase() async {
@@ -331,9 +339,14 @@ class BackendNotifier extends ChangeNotifier {
       SyncLogger.log('Processing queue item: ${item.method}');
       
       try {
-        // Currently we only support fullSync, but this is extensible
         if (item.method == 'fullSync') {
           await fullSync();
+        } else if (item.method == 'syncTable') {
+          final tableName = item.arguments['tableName'] as String;
+          await syncTable(tableName);
+        } else if (item.method == 'sendUnsynced') {
+          final tableName = item.arguments['tableName'] as String;
+          await _sendUnsyncedForTable(tableName);
         }
         // Add more methods here as needed
         
@@ -347,102 +360,145 @@ class BackendNotifier extends ChangeNotifier {
     SyncLogger.log('Queue processing complete');
   }
 
-  Future<void> fullSync() async {
+  Future<void> syncTable(String tableName) async {
+    SyncLogger.log('Starting sync for table: $tableName');
     
-    SyncLogger.log('Starting sync cycle');
+    // First send any unsynced data for this table
+    bool sendSuccess = false;
+    int retryCount = 0;
+    while (!sendSuccess && retryCount < 3) {
+      sendSuccess = await _sendUnsyncedForTable(tableName);
+      if (!sendSuccess) {
+        retryCount++;
+        SyncLogger.log('Retry $retryCount for sending unsynced data for $tableName');
+      }
+    }
+    
+    if (!sendSuccess) {
+      SyncLogger.log('Failed to send unsynced data for $tableName after retries');
+      return;
+    }
+    
+    // Get the last received timestamp for this table
+    final syncingInfo = await _db!.getAll(
+      'SELECT * FROM syncing_table WHERE entity_name = ?',
+      [tableName]
+    );
+    
+    if (syncingInfo.isEmpty) {
+      SyncLogger.log('Table $tableName not found in syncing_table');
+      return;
+    }
+    
+    final table = syncingInfo.first;
+    int page = 10000;
+    bool more = true;
+    String? ts = table['last_received_ts']?.toString() ?? '';
+    
+    SyncLogger.log('Initial TS for $tableName: $ts');
+    
+    while (more && _db != null) {
+      SyncLogger.log('Fetching $tableName with ts: $ts, page: $page');
+      await _fetchData(
+        name: tableName,
+        lastReceivedTs: ts,
+        pageSize: page,
+        onData: (resp) async {
+          SyncLogger.log('Got response for $tableName, starting transaction');
+          await _db!.writeTransaction((tx) async {
+            // Check for new unsynced data that appeared during fetch
+            SyncLogger.log('Checking unsynced in $tableName');
+            final unsynced = await tx.getAll(
+              'select * from $tableName where is_unsynced = 1',
+            );
+            SyncLogger.log('Unsynced check complete for $tableName: ${unsynced.length} records');
+            
+            if (unsynced.isNotEmpty) {
+              SyncLogger.log('Found ${unsynced.length} unsynced records in $tableName');
+              SyncLogger.log('First unsynced: ${unsynced.first}');
+              more = false;
+              // Add table sync back to queue to handle the new unsynced data
+              _addToSyncQueue(SyncQueueItem(method: 'syncTable', arguments: {'tableName': tableName}));
+              return;
+            }
+            
+            SyncLogger.log('Syncing $tableName');
+            SyncLogger.log('Last received TS: $ts');
+            SyncLogger.log('Received ${resp['data']?.length ?? 0} rows');
+            
+            if ((resp['data']?.length ?? 0) == 0) {
+              more = false;
+              return;
+            }
+            
+            final pk = '_id';
+            final cols = abstractMetaEntity.syncableColumnsList[tableName]!;
+            final placeholders = List.filled(cols.length, '?').join(', ');
+            final updates = cols
+                .where((c) => c != pk)
+                .map((c) => '$c = excluded.$c')
+                .join(', ');
+            final sql = '''
+INSERT INTO $tableName (${cols.join(', ')}) VALUES ($placeholders)
+ON CONFLICT($pk) DO UPDATE SET $updates;
+''';
+            final data = List<Map<String, dynamic>>.from(resp['data']);
+            SyncLogger.log('Last ts in response: ${data.last['ts']}');
+            
+            final batch = data
+                .map<List<Object?>>(
+                  (e) => cols.map<Object?>((c) => e[c]).toList(),
+                )
+                .toList();
+            await tx.executeBatch(sql, batch);
+            
+            await tx.execute(
+              'UPDATE syncing_table SET last_received_ts = ? WHERE entity_name = ?',
+              [data.last['ts'], tableName],
+            );
+            
+            if (data.length < page) {
+              more = false;
+            } else {
+              ts = data.last['ts'];
+            }
+          });
+        },
+      );
+      SyncLogger.log('Fetch complete for $tableName, more: $more');
+    }
+    
+    // Process special tables after sync
+    if (tableName == 'Archive') {
+      SyncLogger.log('Processing Archive entries');
+      await _processArchive();
+    } else if (tableName == 'RulesBoard') {
+      SyncLogger.log('Processing RulesBoard entries');
+      await _processRulesBoard();
+    }
+    
+    SyncLogger.log('Table $tableName sync complete');
+  }
+
+  Future<void> fullSync() async {
+    SyncLogger.log('Starting full sync cycle');
     
     try {
       final tables = await _db!.getAll('select * from syncing_table');
       SyncLogger.log('Found ${tables.length} tables to sync');
       SyncLogger.log('Tables: ${tables.map((t) => t['entity_name']).join(', ')}');
-      await _sendUnsynced(syncingTables: tables);
+      
+      // Sync each table (including Archive and RulesBoard which will be processed internally)
       for (var table in tables) {
-        SyncLogger.log('Processing table: ${table['entity_name']}');
-        int page = 10000;
-        bool more = true;
-        String? ts = table['last_received_ts']?.toString() ?? '';
-        SyncLogger.log('Initial TS for ${table['entity_name']}: $ts');
-        while (more && _db != null) {
-          SyncLogger.log('Fetching ${table['entity_name']} with ts: $ts, page: $page');
-          await _fetchData(
-            name: table['entity_name'],
-            lastReceivedTs: ts,
-            pageSize: page,
-            onData: (resp) async {
-              SyncLogger.log('Got response for ${table['entity_name']}, starting transaction');
-              await _db!.writeTransaction((tx) async {
-                SyncLogger.log('Checking unsynced in ${table['entity_name']}');
-                final unsynced = await tx.getAll(
-                  'select * from ${table['entity_name']} where is_unsynced = 1',
-                );
-                SyncLogger.log('Unsynced check complete for ${table['entity_name']}: ${unsynced.length} records');
-                if (unsynced.isNotEmpty) {
-                  SyncLogger.log('Found ${unsynced.length} unsynced records in ${table['entity_name']}');
-                  SyncLogger.log('First unsynced: ${unsynced.first}');
-                  more = false;
-                  // Add sync back to queue to handle the new unsynced data
-                  _addToSyncQueue(SyncQueueItem(method: 'fullSync'));
-                  return;
-                }
-                SyncLogger.log('Syncing ${table['entity_name']}');
-                SyncLogger.log('Last received TS: $ts');
-                SyncLogger.log('Received ${resp['data']?.length ?? 0} rows');
-                if ((resp['data']?.length ?? 0) == 0) {
-                  more = false;
-                  return;
-                }
-                final name = table['entity_name'];
-                final pk = '_id';
-                final cols = abstractMetaEntity
-                    .syncableColumnsList[table['entity_name']]!;
-                final placeholders = List.filled(cols.length, '?').join(', ');
-                final updates = cols
-                    .where((c) => c != pk)
-                    .map((c) => '$c = excluded.$c')
-                    .join(', ');
-                final sql =
-                    '''
-INSERT INTO $name (${cols.join(', ')}) VALUES ($placeholders)
-ON CONFLICT($pk) DO UPDATE SET $updates;
-''';
-                final data = List<Map<String, dynamic>>.from(resp['data']);
-                SyncLogger.log('Last ts in response: ${data.last['ts']}');
-                final batch = data
-                    .map<List<Object?>>(
-                      (e) => cols.map<Object?>((c) => e[c]).toList(),
-                    )
-                    .toList();
-                await tx.executeBatch(sql, batch);
-                await tx.execute(
-                  'UPDATE syncing_table SET last_received_ts = ? WHERE entity_name = ?',
-                  [data.last['ts'], name],
-                );
-                if (data.length < page) {
-                  more = false;
-                } else {
-                  ts = data.last['ts'];
-                }
-              });
-            },
-          );
-          SyncLogger.log('Fetch complete for ${table['entity_name']}, more: $more');
-        }
-        SyncLogger.log('Table ${table['entity_name']} sync complete');
+        await syncTable(table['entity_name']);
       }
-
-      // Process Archive and RulesBoard as part of the sync flow, before releasing the lock
-      SyncLogger.log('About to process Archive');
-      await _processArchive();
-      SyncLogger.log('About to process RulesBoard');
-      await _processRulesBoard();
-      SyncLogger.log('Finished processing Archive and RulesBoard');
       
       SyncLogger.log('End of sync cycle');
     } catch (e, stackTrace) {
       SyncLogger.log('Error during full sync: $e', error: e, stackTrace: stackTrace);
     }
     
-    SyncLogger.log('Sync complete');
+    SyncLogger.log('Full sync complete');
   }
 
   // -----------------------------------------------------------------------
@@ -454,37 +510,25 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
     final dbLocal = _db;
     if (dbLocal == null) return;
 
-    SyncLogger.log('Starting processing...');
-
-    bool needRepeat = false;
+    SyncLogger.log('Starting Archive processing...');
 
     await dbLocal.writeTransaction((tx) async {
-      // 1. Early exit if any unsynced Archive data exists
-      final unsyncedArchive = await tx.getAll(
-        'select 1 from Archive where is_unsynced = 1 limit 1',
-      );
-
-      if (unsyncedArchive.isNotEmpty) {
-        if (kDebugMode) {
-          SyncLogger.log('Unsynced Archive data exists, aborting processing.');
-        }
-        needRepeat = true;
-        return; // abort processing
-      }
-
-      // 2. Get all Archive entries
+      // Only process synced Archive entries (is_unsynced = 0 or NULL)
+      // Unsynced entries should remain in the table for later sync
       final archiveEntries = await tx.getAll(
-        'select * from Archive order by ts asc',
+        'SELECT * FROM Archive WHERE is_unsynced = 0 OR is_unsynced IS NULL ORDER BY ts ASC',
       );
+      
       if (kDebugMode) {
-        SyncLogger.log('Found ${archiveEntries.length} entries.');
+        SyncLogger.log('Found ${archiveEntries.length} synced Archive entries to process');
       }
+      
       if (archiveEntries.isEmpty) return; // nothing to process
 
-      // Process each Archive entry
+      // Process each synced Archive entry
       for (var entry in archiveEntries) {
         if (kDebugMode) {
-          SyncLogger.log('Processing entry: ${entry['_id']}');
+          SyncLogger.log('Processing Archive entry: ${entry['_id']}');
         }
 
         final entityName = entry['name'];
@@ -515,25 +559,20 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
         }
 
         // Delete the referenced document if it exists
-        await tx.execute('DELETE FROM "$entityName" WHERE id = ?', [entityId]);
+        await tx.execute('DELETE FROM "$entityName" WHERE _id = ?', [entityId]);
       }
 
-      // After processing all entries, clear the Archive table
+      // After processing, delete only the synced Archive entries
       if (archiveEntries.isNotEmpty) {
         if (kDebugMode) {
-          SyncLogger.log('Clearing local Archive table.');
+          SyncLogger.log('Clearing processed (synced) Archive entries');
         }
-        await tx.execute('DELETE FROM Archive');
+        await tx.execute('DELETE FROM Archive WHERE is_unsynced = 0 OR is_unsynced IS NULL');
       }
     });
 
-    if (needRepeat) {
-      if (kDebugMode) {
-        SyncLogger.log('Processing aborted due to unsynced data, will repeat sync.');
-      }
-      repeat = true;
-    } else if (kDebugMode) {
-      SyncLogger.log('Processing complete.');
+    if (kDebugMode) {
+      SyncLogger.log('Archive processing complete');
     }
   }
 
@@ -547,14 +586,6 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
     if (dbLocal == null) return;
 
     SyncLogger.log('Starting processing...');
-
-    // Step 1-2: Ensure everything is synced before processing
-    final hasUnsyncedData = await _hasAnyUnsyncedData(dbLocal);
-    if (hasUnsyncedData) {
-      SyncLogger.log('Unsynced data exists, will repeat sync.');
-      repeat = true;
-      return;
-    }
 
     // Step 3: Check if shadow syncing_table exists (indicates resuming)
     final shadowSyncingExists = await dbLocal.getAll(
@@ -582,18 +613,6 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
     for (final entry in rulesEntries) {
       await _processRulesBoardEntry(dbLocal, entry);
     }
-  }
-
-  Future<bool> _hasAnyUnsyncedData(SqliteDatabase db) async {
-    final tables = await db.getAll('SELECT entity_name FROM syncing_table');
-    for (final table in tables) {
-      final tableName = table['entity_name'] as String;
-      final unsynced = await db.getAll(
-        'SELECT 1 FROM "$tableName" WHERE is_unsynced = 1 LIMIT 1',
-      );
-      if (unsynced.isNotEmpty) return true;
-    }
-    return false;
   }
 
   Future<void> _processRulesBoardEntry(SqliteDatabase db, Map<String, dynamic> entry) async {
@@ -770,17 +789,6 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
   }
 
   Future<void> _compareAndCleanup(SqliteDatabase db, List<Map<String, dynamic>> shadowTables) async {
-    // First check for any new unsynced data
-    final hasNewUnsyncedData = await _hasAnyUnsyncedData(db);
-    if (hasNewUnsyncedData) {
-      if (kDebugMode) {
-        SyncLogger.log('New unsynced data appeared during shadow sync, dropping shadow tables and doing full sync');
-      }
-      // Drop all shadow tables
-      await _dropShadowTables(db, shadowTables);
-      repeat = true;
-      return;
-    }
 
     // Replace original tables with shadow tables
     await db.writeTransaction((tx) async {
@@ -801,8 +809,12 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
         
         if (unsyncedCheck.isNotEmpty) {
           if (kDebugMode) {
-            SyncLogger.log('Found unsynced data in $tableName, skipping truncate for this table');
+            SyncLogger.log('Found unsynced data in $tableName, queueing sync and will resume RulesBoard processing');
           }
+          // Queue sending unsynced data for this table
+          _addToSyncQueue(SyncQueueItem(method: 'sendUnsynced', arguments: {'tableName': tableName}));
+          // Queue processing RulesBoard again to resume after unsynced data is sent
+          _addToSyncQueue(SyncQueueItem(method: 'syncTable', arguments: {'tableName': 'RulesBoard'}));
           continue;
         }
 
@@ -848,9 +860,9 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
 
     // Step 10: Call full resync
     if (kDebugMode) {
-      SyncLogger.log('Shadow sync complete, will repeat sync');
+      SyncLogger.log('Shadow sync complete, adding fullSync to queue');
     }
-    repeat = true;
+    _addToSyncQueue(SyncQueueItem(method: 'fullSync'));
   }
 
   Future<void> _dropShadowTables(SqliteDatabase db, List<Map<String, dynamic>> shadowTables) async {
@@ -865,54 +877,55 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
     });
   }
 
-  Future<void> _sendUnsynced({required ResultSet syncingTables}) async {
+  Future<bool> _sendUnsyncedForTable(String tableName) async {
     final db = _db!;
-    bool retry = false;
-    for (var table in syncingTables) {
-      final rows = await db.getAll(
-        'select ${abstractMetaEntity.syncableColumnsString[table['entity_name']]} from ${table['entity_name']} where is_unsynced = 1',
-      );
-      if (rows.isEmpty) continue;
-      final uri = Uri.parse('$_serverUrl/data');
-      final headers = {
-        'Content-Type': 'application/json',
-        'appid': abstractSyncConstants.appId,
-      };
-      if (_authToken != null) {
-        headers['authorization'] = _authToken!;
-      }
-
-      final res = await http.post(
-        uri,
-        headers: headers,
-        body: jsonEncode({
-          'name': table['entity_name'],
-          'data': jsonEncode(rows),
-        }),
-      );
-      if (res.statusCode != 200) {
-        //todo: not sure, may be infinite loop
-        retry = true;
-        break;
-      }
-      await db.writeTransaction((tx) async {
-        //todo: not sure if this most efficient way
-        final rows2 = await tx.getAll(
-          'select ${abstractMetaEntity.syncableColumnsString[table['entity_name']]} from ${table['entity_name']} where is_unsynced = 1',
-        );
-        if (DeepCollectionEquality().equals(rows, rows2)) {
-          await tx.execute(
-            'update ${table['entity_name']} set is_unsynced = 0 where is_unsynced = 1',
-          );
-        } else {
-          retry = true;
-        }
-      });
-      if (retry) {
-        await _sendUnsynced(syncingTables: syncingTables);
-        break;
-      }
+    final rows = await db.getAll(
+      'select ${abstractMetaEntity.syncableColumnsString[tableName]} from $tableName where is_unsynced = 1',
+    );
+    
+    if (rows.isEmpty) return true; // Nothing to send, success
+    
+    final uri = Uri.parse('$_serverUrl/data');
+    final headers = {
+      'Content-Type': 'application/json',
+      'appid': abstractSyncConstants.appId,
+    };
+    if (_authToken != null) {
+      headers['authorization'] = _authToken!;
     }
+
+    final res = await http.post(
+      uri,
+      headers: headers,
+      body: jsonEncode({
+        'name': tableName,
+        'data': jsonEncode(rows),
+      }),
+    );
+    
+    if (res.statusCode != 200) {
+      SyncLogger.log('Failed to send unsynced for $tableName: ${res.statusCode}');
+      return false;
+    }
+    
+    // Check if data changed during send and mark as synced if not
+    final success = await db.writeTransaction((tx) async {
+      final rows2 = await tx.getAll(
+        'select ${abstractMetaEntity.syncableColumnsString[tableName]} from $tableName where is_unsynced = 1',
+      );
+      
+      if (DeepCollectionEquality().equals(rows, rows2)) {
+        await tx.execute(
+          'update $tableName set is_unsynced = 0 where is_unsynced = 1',
+        );
+        return true;
+      } else {
+        SyncLogger.log('Data changed during send for $tableName, needs retry');
+        return false;
+      }
+    });
+    
+    return success;
   }
 
   Future<void> _startSyncer() async {
