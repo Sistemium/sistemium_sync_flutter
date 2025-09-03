@@ -14,6 +14,28 @@ import 'package:sqlite_async/sqlite3.dart';
 import 'package:sqlite_async/sqlite3_common.dart';
 import 'package:sqlite_async/sqlite_async.dart';
 
+// Queue item for sync operations
+class SyncQueueItem {
+  final String method;
+  final Map<String, dynamic> arguments;
+
+  SyncQueueItem({
+    required this.method,
+    this.arguments = const {},
+  });
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SyncQueueItem &&
+          runtimeType == other.runtimeType &&
+          method == other.method &&
+          const DeepCollectionEquality().equals(arguments, other.arguments);
+
+  @override
+  int get hashCode => method.hashCode ^ const DeepCollectionEquality().hash(arguments);
+}
+
 class BackendNotifier extends ChangeNotifier {
   final AbstractPregeneratedMigrations abstractPregeneratedMigrations;
   final AbstractSyncConstants abstractSyncConstants;
@@ -27,6 +49,10 @@ class BackendNotifier extends ChangeNotifier {
   String? _authToken;
 
   final Map<String, Timer?> _retryTimers = {};
+
+  // Sync queue system
+  final List<SyncQueueItem> _syncQueue = [];
+  final ValueNotifier<bool> isProcessingQueue = ValueNotifier<bool>(false);
 
   BackendNotifier({
     required this.abstractPregeneratedMigrations,
@@ -187,7 +213,7 @@ class BackendNotifier extends ChangeNotifier {
     ''';
     await db!.execute(sql, [...values, ...values]);
     if (tx == null) {
-      fullSync();
+      _addToSyncQueue(SyncQueueItem(method: 'fullSync'));
     }
   }
 
@@ -195,7 +221,7 @@ class BackendNotifier extends ChangeNotifier {
     if (_db == null) throw Exception('Database not initialized');
     final result = await _db!.writeTransaction(callback);
     // Automatically trigger fullSync after transaction completes
-    fullSync();
+    _addToSyncQueue(SyncQueueItem(method: 'fullSync'));
     return result;
   }
 
@@ -227,7 +253,7 @@ class BackendNotifier extends ChangeNotifier {
       );
     });
 
-    await fullSync();
+    _addToSyncQueue(SyncQueueItem(method: 'fullSync'));
   }
 
   Future<SqliteDatabase> _openDatabase() async {
@@ -278,20 +304,53 @@ class BackendNotifier extends ChangeNotifier {
     }
   }
 
-  final ValueNotifier<bool> syncStarted = ValueNotifier<bool>(false);
-  bool repeat = false;
-
-  //todo: sometimes we need to sync only one table, not all
-  Future<void> fullSync() async {
-    if (syncStarted.value) {
-      repeat = true;
+  // Queue management methods
+  void _addToSyncQueue(SyncQueueItem item) {
+    // Check if identical item already exists in queue
+    if (_syncQueue.contains(item)) {
+      SyncLogger.log('Sync operation already in queue: ${item.method}');
       return;
     }
-    syncStarted.value = true;
     
-    do {
-      repeat = false;
-      SyncLogger.log('Starting sync cycle');
+    _syncQueue.add(item);
+    SyncLogger.log('Added to sync queue: ${item.method}');
+    
+    // Start processing if not already running
+    if (!isProcessingQueue.value) {
+      _processQueue();
+    }
+  }
+
+  Future<void> _processQueue() async {
+    if (isProcessingQueue.value || _db == null) return;
+    
+    isProcessingQueue.value = true;
+    
+    while (_syncQueue.isNotEmpty && _db != null) {
+      final item = _syncQueue.removeAt(0);
+      SyncLogger.log('Processing queue item: ${item.method}');
+      
+      try {
+        // Currently we only support fullSync, but this is extensible
+        if (item.method == 'fullSync') {
+          await fullSync();
+        }
+        // Add more methods here as needed
+        
+      } catch (e, stackTrace) {
+        SyncLogger.log('Error processing queue item ${item.method}: $e', 
+          error: e, stackTrace: stackTrace);
+      }
+    }
+    
+    isProcessingQueue.value = false;
+    SyncLogger.log('Queue processing complete');
+  }
+
+  Future<void> fullSync() async {
+    
+    SyncLogger.log('Starting sync cycle');
+    
     try {
       final tables = await _db!.getAll('select * from syncing_table');
       SyncLogger.log('Found ${tables.length} tables to sync');
@@ -321,8 +380,8 @@ class BackendNotifier extends ChangeNotifier {
                   SyncLogger.log('Found ${unsynced.length} unsynced records in ${table['entity_name']}');
                   SyncLogger.log('First unsynced: ${unsynced.first}');
                   more = false;
-                  //todo: might there be infinite loop, perhaps we need to log something to sentry for debug purposes
-                  repeat = true;
+                  // Add sync back to queue to handle the new unsynced data
+                  _addToSyncQueue(SyncQueueItem(method: 'fullSync'));
                   return;
                 }
                 SyncLogger.log('Syncing ${table['entity_name']}');
@@ -370,22 +429,20 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
         }
         SyncLogger.log('Table ${table['entity_name']} sync complete');
       }
+
+      // Process Archive and RulesBoard as part of the sync flow, before releasing the lock
+      SyncLogger.log('About to process Archive');
+      await _processArchive();
+      SyncLogger.log('About to process RulesBoard');
+      await _processRulesBoard();
+      SyncLogger.log('Finished processing Archive and RulesBoard');
+      
+      SyncLogger.log('End of sync cycle');
     } catch (e, stackTrace) {
       SyncLogger.log('Error during full sync: $e', error: e, stackTrace: stackTrace);
     }
-
-    // Process Archive and RulesBoard as part of the sync flow, before releasing the lock
-    SyncLogger.log('About to process Archive');
-    await _processArchive();
-    SyncLogger.log('About to process RulesBoard');
-    await _processRulesBoard();
-    SyncLogger.log('Finished processing Archive and RulesBoard');
     
-    SyncLogger.log('End of sync cycle, repeat=$repeat');
-    } while (repeat && _db != null);
-    
-    SyncLogger.log('Sync loop complete, setting syncStarted to false');
-    syncStarted.value = false;
+    SyncLogger.log('Sync complete');
   }
 
   // -----------------------------------------------------------------------
@@ -878,14 +935,14 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
       final res = await client.send(request);
       if (res.statusCode == 200) {
         _sseConnected = true;
-        await fullSync();
+        _addToSyncQueue(SyncQueueItem(method: 'fullSync'));
         _eventSubscription = res.stream
             .transform(utf8.decoder)
             .transform(const LineSplitter())
             .listen(
               (e) {
                 //todo: performance improvement, maybe we do not need full here
-                if (e.startsWith('data:')) fullSync();
+                if (e.startsWith('data:')) _addToSyncQueue(SyncQueueItem(method: 'fullSync'));
               },
               onError: (e) {
                 if (kDebugMode) {
@@ -907,8 +964,10 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
   
   @override
   void dispose() {
-    syncStarted.dispose();
+    isProcessingQueue.dispose();
     _eventSubscription?.cancel();
+    _syncQueue.clear();
+    isProcessingQueue.value = false;
     _db?.close();
     super.dispose();
   }
