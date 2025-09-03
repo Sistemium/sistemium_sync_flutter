@@ -857,12 +857,6 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
 
     // Step 9: Drop shadow tables
     await _dropShadowTables(db, shadowTables);
-
-    // Step 10: Call full resync
-    if (kDebugMode) {
-      SyncLogger.log('Shadow sync complete, adding fullSync to queue');
-    }
-    _addToSyncQueue(SyncQueueItem(method: 'fullSync'));
   }
 
   Future<void> _dropShadowTables(SqliteDatabase db, List<Map<String, dynamic>> shadowTables) async {
@@ -954,8 +948,14 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
             .transform(const LineSplitter())
             .listen(
               (e) {
-                //todo: performance improvement, maybe we do not need full here
-                if (e.startsWith('data:')) _addToSyncQueue(SyncQueueItem(method: 'fullSync'));
+                if (e.startsWith('data:')) {
+                  // Extract table name from SSE message (format: "data: TableName")
+                  final tableName = e.substring(5).trim();
+                  if (tableName.isNotEmpty) {
+                    SyncLogger.log('SSE event for table: $tableName');
+                    _addToSyncQueue(SyncQueueItem(method: 'syncTable', arguments: {'tableName': tableName}));
+                  }
+                }
               },
               onError: (e) {
                 if (kDebugMode) {
