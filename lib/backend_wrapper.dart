@@ -363,6 +363,9 @@ class BackendNotifier extends ChangeNotifier {
   Future<void> syncTable(String tableName) async {
     SyncLogger.log('Starting sync for table: $tableName');
     
+    // Yield to UI thread before starting heavy sync operation
+    await Future.delayed(Duration(milliseconds: 1));
+    
     // First send any unsynced data for this table
     bool sendSuccess = false;
     int retryCount = 0;
@@ -371,6 +374,8 @@ class BackendNotifier extends ChangeNotifier {
       if (!sendSuccess) {
         retryCount++;
         SyncLogger.log('Retry $retryCount for sending unsynced data for $tableName');
+        // Small delay between retries
+        await Future.delayed(Duration(milliseconds: 10));
       }
     }
     
@@ -405,6 +410,18 @@ class BackendNotifier extends ChangeNotifier {
         pageSize: page,
         onData: (resp) async {
           SyncLogger.log('Got response for $tableName, starting transaction');
+          
+          // Quick check if we have data before starting transaction
+          final dataLength = resp['data']?.length ?? 0;
+          if (dataLength == 0) {
+            SyncLogger.log('No data received for $tableName, skipping transaction');
+            more = false;
+            return;
+          }
+          
+          // Add small delay to yield to UI thread between heavy operations
+          await Future.delayed(Duration(milliseconds: 1));
+          
           await _db!.writeTransaction((tx) async {
             // Check for new unsynced data that appeared during fetch
             SyncLogger.log('Checking unsynced in $tableName');
@@ -424,12 +441,7 @@ class BackendNotifier extends ChangeNotifier {
             
             SyncLogger.log('Syncing $tableName');
             SyncLogger.log('Last received TS: $ts');
-            SyncLogger.log('Received ${resp['data']?.length ?? 0} rows');
-            
-            if ((resp['data']?.length ?? 0) == 0) {
-              more = false;
-              return;
-            }
+            SyncLogger.log('Received $dataLength rows')
             
             final pk = '_id';
             final cols = abstractMetaEntity.syncableColumnsList[tableName]!;
