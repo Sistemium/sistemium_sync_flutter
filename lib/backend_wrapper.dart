@@ -14,6 +14,22 @@ import 'package:sqlite_async/sqlite3.dart';
 import 'package:sqlite_async/sqlite3_common.dart';
 import 'package:sqlite_async/sqlite_async.dart';
 
+// Helper classes for isolate HTTP requests
+class _HttpGetRequest {
+  final Uri uri;
+  final Map<String, String> headers;
+  
+  _HttpGetRequest({required this.uri, required this.headers});
+}
+
+class _HttpPostRequest {
+  final Uri uri;
+  final Map<String, String> headers;
+  final String body;
+  
+  _HttpPostRequest({required this.uri, required this.headers, required this.body});
+}
+
 // Queue item for sync operations
 class SyncQueueItem {
   final String method;
@@ -65,6 +81,15 @@ class BackendNotifier extends ChangeNotifier {
   // Single helper for JSON parsing in isolate
   static Map<String, dynamic> _parseJsonInIsolate(String body) {
     return jsonDecode(body) as Map<String, dynamic>;
+  }
+
+  // Network request helper for isolate execution
+  static Future<http.Response> _executeHttpGet(_HttpGetRequest request) async {
+    return await http.get(request.uri, headers: request.headers);
+  }
+  
+  static Future<http.Response> _executeHttpPost(_HttpPostRequest request) async {
+    return await http.post(request.uri, headers: request.headers, body: request.body);
   }
 
   Future<void> initDb({
@@ -151,10 +176,12 @@ class BackendNotifier extends ChangeNotifier {
         headers['authorization'] = _authToken!;
       }
 
-      final res = await http.get(uri, headers: headers);
+      // Execute HTTP request in isolate to avoid blocking UI
+      final res = await compute(_executeHttpGet, _HttpGetRequest(uri: uri, headers: headers));
       
       if (res.statusCode == 200) {
-        final body = jsonDecode(res.body);
+        // Parse JSON in isolate as well
+        final body = await compute(_parseJsonInIsolate, res.body);
         // Successfully got response - timestamp can be null if collection is empty
         return _TimestampResult(
           hasError: false,
@@ -303,7 +330,8 @@ class BackendNotifier extends ChangeNotifier {
       headers['authorization'] = _authToken!;
     }
 
-    final res = await http.get(uri, headers: headers);
+    // Execute HTTP request in isolate to avoid blocking UI
+    final res = await compute(_executeHttpGet, _HttpGetRequest(uri: uri, headers: headers));
     if (res.statusCode == 200) {
       final data = await compute(_parseJsonInIsolate, res.body);
       await onData(data);
@@ -888,13 +916,15 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
       headers['authorization'] = _authToken!;
     }
 
-    final res = await http.post(
-      uri,
-      headers: headers,
-      body: jsonEncode({
-        'name': tableName,
-        'data': jsonEncode(rows),
-      }),
+    // Execute HTTP POST in isolate to avoid blocking UI
+    final bodyStr = jsonEncode({
+      'name': tableName,
+      'data': jsonEncode(rows),
+    });
+    
+    final res = await compute(
+      _executeHttpPost, 
+      _HttpPostRequest(uri: uri, headers: headers, body: bodyStr)
     );
     
     if (res.statusCode != 200) {
