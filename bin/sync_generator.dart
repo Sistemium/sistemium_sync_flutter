@@ -4,7 +4,9 @@ import 'package:http/http.dart' as http;
 
 void main(List<String> args) async {
   if (args.length < 2 || args.length > 4) {
-    print('Usage: dart sync_generator.dart <server_url> <app_id> [auth_token] [output_path]');
+    print(
+      'Usage: dart sync_generator.dart <server_url> <app_id> [auth_token] [output_path]',
+    );
     exit(1);
   }
 
@@ -25,10 +27,7 @@ void main(List<String> args) async {
     final headers = <String, String>{'appid': targetAppId};
     if (authToken != null) headers['Authorization'] = authToken;
 
-    final response = await http.get(
-      modelsUrl,
-      headers: headers,
-    );
+    final response = await http.get(modelsUrl, headers: headers);
     if (response.statusCode != 200) {
       print('Error fetching data from $modelsUrl: ${response.statusCode}');
       print('Response body: ${response.body}');

@@ -10,6 +10,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:sistemium_sync_flutter/sync_abstract.dart';
 import 'package:sistemium_sync_flutter/sync_logger.dart';
+import 'package:socket_io_client/socket_io_client.dart' as io;
 import 'package:sqlite_async/sqlite3.dart';
 import 'package:sqlite_async/sqlite3_common.dart';
 import 'package:sqlite_async/sqlite_async.dart';
@@ -19,10 +20,7 @@ class SyncQueueItem {
   final String method;
   final Map<String, dynamic> arguments;
 
-  SyncQueueItem({
-    required this.method,
-    this.arguments = const {},
-  });
+  SyncQueueItem({required this.method, this.arguments = const {}});
 
   @override
   bool operator ==(Object other) =>
@@ -33,7 +31,8 @@ class SyncQueueItem {
           const DeepCollectionEquality().equals(arguments, other.arguments);
 
   @override
-  int get hashCode => method.hashCode ^ const DeepCollectionEquality().hash(arguments);
+  int get hashCode =>
+      method.hashCode ^ const DeepCollectionEquality().hash(arguments);
 }
 
 class BackendNotifier extends ChangeNotifier {
@@ -42,8 +41,8 @@ class BackendNotifier extends ChangeNotifier {
   final AbstractMetaEntity abstractMetaEntity;
 
   SqliteDatabase? _db;
-  bool _sseConnected = false;
-  StreamSubscription? _eventSubscription;
+  bool _socketConnected = false;
+  io.Socket? _socket;
   String? _serverUrl;
   String? userId;
   String? _authToken;
@@ -88,9 +87,8 @@ class BackendNotifier extends ChangeNotifier {
   }
 
   Future<void> deinitDb() async {
-    await _eventSubscription?.cancel();
-    _eventSubscription = null;
-    _sseConnected = false;
+    _disconnectSocket();
+    _socketConnected = false;
 
     // Cancel all retry timers
     for (var timer in _retryTimers.values) {
@@ -107,7 +105,10 @@ class BackendNotifier extends ChangeNotifier {
   // System tables syncing_table registration
   // -----------------------------------------------------------------------
 
-  Future<void> _ensureTableRegistration(SqliteDatabase db, String tableName) async {
+  Future<void> _ensureTableRegistration(
+    SqliteDatabase db,
+    String tableName,
+  ) async {
     try {
       final existing = await db.getAll(
         'SELECT 1 FROM syncing_table WHERE entity_name = ? LIMIT 1',
@@ -118,10 +119,13 @@ class BackendNotifier extends ChangeNotifier {
       }
 
       final result = await _requestLatestTableTs(tableName);
-      
+
       // If server request failed (network error, auth error, etc), schedule retry
       if (result.hasError) {
-        SyncLogger.log('Failed to get $tableName timestamp from server: ${result.error}', error: result.error);
+        SyncLogger.log(
+          'Failed to get $tableName timestamp from server: ${result.error}',
+          error: result.error,
+        );
         _scheduleTableRetry(db, tableName);
         return;
       }
@@ -131,28 +135,38 @@ class BackendNotifier extends ChangeNotifier {
         'INSERT INTO syncing_table (_id, entity_name, last_received_ts) VALUES (?, ?, ?)',
         [ObjectId().hexString, tableName, result.timestamp],
       );
-      SyncLogger.log('Successfully registered $tableName with ts: ${result.timestamp}');
+      SyncLogger.log(
+        'Successfully registered $tableName with ts: ${result.timestamp}',
+      );
     } catch (e, st) {
-      SyncLogger.log('Error ensuring $tableName registration: $e', error: e, stackTrace: st);
+      SyncLogger.log(
+        'Error ensuring $tableName registration: $e',
+        error: e,
+        stackTrace: st,
+      );
       _scheduleTableRetry(db, tableName);
     }
   }
 
-
   Future<_TimestampResult> _requestLatestTableTs(String tableName) async {
     if (_serverUrl == null) {
-      return _TimestampResult(hasError: true, error: 'Server URL not configured');
+      return _TimestampResult(
+        hasError: true,
+        error: 'Server URL not configured',
+      );
     }
-    
+
     try {
-      final uri = Uri.parse('$_serverUrl/latest-ts').replace(queryParameters: {'name': tableName});
+      final uri = Uri.parse(
+        '$_serverUrl/latest-ts',
+      ).replace(queryParameters: {'name': tableName});
       final headers = {'appid': abstractSyncConstants.appId};
       if (_authToken != null) {
         headers['authorization'] = _authToken!;
       }
 
       final res = await http.get(uri, headers: headers);
-      
+
       if (res.statusCode == 200) {
         final body = jsonDecode(res.body);
         // Successfully got response - timestamp can be null if collection is empty
@@ -169,10 +183,7 @@ class BackendNotifier extends ChangeNotifier {
       }
     } catch (e) {
       // Network or other error
-      return _TimestampResult(
-        hasError: true,
-        error: e.toString(),
-      );
+      return _TimestampResult(hasError: true, error: e.toString());
     }
   }
 
@@ -213,7 +224,12 @@ class BackendNotifier extends ChangeNotifier {
     ''';
     await db!.execute(sql, [...values, ...values]);
     if (tx == null) {
-      _addToSyncQueue(SyncQueueItem(method: 'sendUnsynced', arguments: {'tableName': tableName}));
+      _addToSyncQueue(
+        SyncQueueItem(
+          method: 'sendUnsynced',
+          arguments: {'tableName': tableName},
+        ),
+      );
     }
   }
 
@@ -223,12 +239,17 @@ class BackendNotifier extends ChangeNotifier {
   }) async {
     if (_db == null) throw Exception('Database not initialized');
     final result = await _db!.writeTransaction(callback);
-    
+
     // Queue sync for each affected table
     for (final tableName in affectedTables) {
-      _addToSyncQueue(SyncQueueItem(method: 'sendUnsynced', arguments: {'tableName': tableName}));
+      _addToSyncQueue(
+        SyncQueueItem(
+          method: 'sendUnsynced',
+          arguments: {'tableName': tableName},
+        ),
+      );
     }
-    
+
     return result;
   }
 
@@ -261,7 +282,12 @@ class BackendNotifier extends ChangeNotifier {
     });
 
     // Only need to sync Archive table since it has the new unsynced entry
-    _addToSyncQueue(SyncQueueItem(method: 'sendUnsynced', arguments: {'tableName': 'Archive'}));
+    _addToSyncQueue(
+      SyncQueueItem(
+        method: 'sendUnsynced',
+        arguments: {'tableName': 'Archive'},
+      ),
+    );
   }
 
   Future<SqliteDatabase> _openDatabase() async {
@@ -319,10 +345,10 @@ class BackendNotifier extends ChangeNotifier {
       SyncLogger.log('Sync operation already in queue: ${item.method}');
       return;
     }
-    
+
     _syncQueue.add(item);
     SyncLogger.log('Added to sync queue: ${item.method}');
-    
+
     // Start processing if not already running
     if (!isProcessingQueue.value) {
       _processQueue();
@@ -331,13 +357,13 @@ class BackendNotifier extends ChangeNotifier {
 
   Future<void> _processQueue() async {
     if (isProcessingQueue.value || _db == null) return;
-    
+
     isProcessingQueue.value = true;
-    
+
     while (_syncQueue.isNotEmpty && _db != null) {
       final item = _syncQueue.removeAt(0);
       SyncLogger.log('Processing queue item: ${item.method}');
-      
+
       try {
         if (item.method == 'fullSync') {
           await fullSync();
@@ -349,20 +375,22 @@ class BackendNotifier extends ChangeNotifier {
           await _sendUnsyncedForTable(tableName);
         }
         // Add more methods here as needed
-        
       } catch (e, stackTrace) {
-        SyncLogger.log('Error processing queue item ${item.method}: $e', 
-          error: e, stackTrace: stackTrace);
+        SyncLogger.log(
+          'Error processing queue item ${item.method}: $e',
+          error: e,
+          stackTrace: stackTrace,
+        );
       }
     }
-    
+
     isProcessingQueue.value = false;
     SyncLogger.log('Queue processing complete');
   }
 
   Future<void> syncTable(String tableName) async {
     SyncLogger.log('Starting sync for table: $tableName');
-    
+
     // First send any unsynced data for this table
     bool sendSuccess = false;
     int retryCount = 0;
@@ -370,33 +398,37 @@ class BackendNotifier extends ChangeNotifier {
       sendSuccess = await _sendUnsyncedForTable(tableName);
       if (!sendSuccess) {
         retryCount++;
-        SyncLogger.log('Retry $retryCount for sending unsynced data for $tableName');
+        SyncLogger.log(
+          'Retry $retryCount for sending unsynced data for $tableName',
+        );
       }
     }
-    
+
     if (!sendSuccess) {
-      SyncLogger.log('Failed to send unsynced data for $tableName after retries');
+      SyncLogger.log(
+        'Failed to send unsynced data for $tableName after retries',
+      );
       return;
     }
-    
+
     // Get the last received timestamp for this table
     final syncingInfo = await _db!.getAll(
       'SELECT * FROM syncing_table WHERE entity_name = ?',
-      [tableName]
+      [tableName],
     );
-    
+
     if (syncingInfo.isEmpty) {
       SyncLogger.log('Table $tableName not found in syncing_table');
       return;
     }
-    
+
     final table = syncingInfo.first;
     int page = 10000;
     bool more = true;
     String? ts = table['last_received_ts']?.toString() ?? '';
-    
+
     SyncLogger.log('Initial TS for $tableName: $ts');
-    
+
     while (more && _db != null) {
       SyncLogger.log('Fetching $tableName with ts: $ts, page: $page');
       await _fetchData(
@@ -411,26 +443,35 @@ class BackendNotifier extends ChangeNotifier {
             final unsynced = await tx.getAll(
               'select * from $tableName where is_unsynced = 1',
             );
-            SyncLogger.log('Unsynced check complete for $tableName: ${unsynced.length} records');
-            
+            SyncLogger.log(
+              'Unsynced check complete for $tableName: ${unsynced.length} records',
+            );
+
             if (unsynced.isNotEmpty) {
-              SyncLogger.log('Found ${unsynced.length} unsynced records in $tableName');
+              SyncLogger.log(
+                'Found ${unsynced.length} unsynced records in $tableName',
+              );
               SyncLogger.log('First unsynced: ${unsynced.first}');
               more = false;
               // Add table sync back to queue to handle the new unsynced data
-              _addToSyncQueue(SyncQueueItem(method: 'syncTable', arguments: {'tableName': tableName}));
+              _addToSyncQueue(
+                SyncQueueItem(
+                  method: 'syncTable',
+                  arguments: {'tableName': tableName},
+                ),
+              );
               return;
             }
-            
+
             SyncLogger.log('Syncing $tableName');
             SyncLogger.log('Last received TS: $ts');
             SyncLogger.log('Received ${resp['data']?.length ?? 0} rows');
-            
+
             if ((resp['data']?.length ?? 0) == 0) {
               more = false;
               return;
             }
-            
+
             final pk = '_id';
             final cols = abstractMetaEntity.syncableColumnsList[tableName]!;
             final placeholders = List.filled(cols.length, '?').join(', ');
@@ -438,25 +479,26 @@ class BackendNotifier extends ChangeNotifier {
                 .where((c) => c != pk)
                 .map((c) => '$c = excluded.$c')
                 .join(', ');
-            final sql = '''
+            final sql =
+                '''
 INSERT INTO $tableName (${cols.join(', ')}) VALUES ($placeholders)
 ON CONFLICT($pk) DO UPDATE SET $updates;
 ''';
             final data = List<Map<String, dynamic>>.from(resp['data']);
             SyncLogger.log('Last ts in response: ${data.last['ts']}');
-            
+
             final batch = data
                 .map<List<Object?>>(
                   (e) => cols.map<Object?>((c) => e[c]).toList(),
                 )
                 .toList();
             await tx.executeBatch(sql, batch);
-            
+
             await tx.execute(
               'UPDATE syncing_table SET last_received_ts = ? WHERE entity_name = ?',
               [data.last['ts'], tableName],
             );
-            
+
             if (data.length < page) {
               more = false;
             } else {
@@ -467,7 +509,7 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
       );
       SyncLogger.log('Fetch complete for $tableName, more: $more');
     }
-    
+
     // Process special tables after sync
     if (tableName == 'Archive') {
       SyncLogger.log('Processing Archive entries');
@@ -476,28 +518,34 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
       SyncLogger.log('Processing RulesBoard entries');
       await _processRulesBoard();
     }
-    
+
     SyncLogger.log('Table $tableName sync complete');
   }
 
   Future<void> fullSync() async {
     SyncLogger.log('Starting full sync cycle');
-    
+
     try {
       final tables = await _db!.getAll('select * from syncing_table');
       SyncLogger.log('Found ${tables.length} tables to sync');
-      SyncLogger.log('Tables: ${tables.map((t) => t['entity_name']).join(', ')}');
-      
+      SyncLogger.log(
+        'Tables: ${tables.map((t) => t['entity_name']).join(', ')}',
+      );
+
       // Sync each table (including Archive and RulesBoard which will be processed internally)
       for (var table in tables) {
         await syncTable(table['entity_name']);
       }
-      
+
       SyncLogger.log('End of sync cycle');
     } catch (e, stackTrace) {
-      SyncLogger.log('Error during full sync: $e', error: e, stackTrace: stackTrace);
+      SyncLogger.log(
+        'Error during full sync: $e',
+        error: e,
+        stackTrace: stackTrace,
+      );
     }
-    
+
     SyncLogger.log('Full sync complete');
   }
 
@@ -518,11 +566,13 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
       final archiveEntries = await tx.getAll(
         'SELECT * FROM Archive WHERE is_unsynced = 0 OR is_unsynced IS NULL ORDER BY ts ASC',
       );
-      
+
       if (kDebugMode) {
-        SyncLogger.log('Found ${archiveEntries.length} synced Archive entries to process');
+        SyncLogger.log(
+          'Found ${archiveEntries.length} synced Archive entries to process',
+        );
       }
-      
+
       if (archiveEntries.isEmpty) return; // nothing to process
 
       // Process each synced Archive entry
@@ -549,7 +599,9 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
 
         if (tableExists.isEmpty) {
           if (kDebugMode) {
-            SyncLogger.log('Skipping delete for $entityName - table not in syncing_table');
+            SyncLogger.log(
+              'Skipping delete for $entityName - table not in syncing_table',
+            );
           }
           continue;
         }
@@ -567,7 +619,9 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
         if (kDebugMode) {
           SyncLogger.log('Clearing processed (synced) Archive entries');
         }
-        await tx.execute('DELETE FROM Archive WHERE is_unsynced = 0 OR is_unsynced IS NULL');
+        await tx.execute(
+          'DELETE FROM Archive WHERE is_unsynced = 0 OR is_unsynced IS NULL',
+        );
       }
     });
 
@@ -615,7 +669,10 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
     }
   }
 
-  Future<void> _processRulesBoardEntry(SqliteDatabase db, Map<String, dynamic> entry) async {
+  Future<void> _processRulesBoardEntry(
+    SqliteDatabase db,
+    Map<String, dynamic> entry,
+  ) async {
     SyncLogger.log('Processing entry: $entry');
 
     final jsonStr = entry['fullResyncCollections'];
@@ -631,9 +688,12 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
     }
 
     // Filter out system tables
-    tablesToResync = tablesToResync.where((tbl) => 
-      tbl != 'RulesBoard' && tbl != 'Archive' && tbl != 'syncing_table'
-    ).toList();
+    tablesToResync = tablesToResync
+        .where(
+          (tbl) =>
+              tbl != 'RulesBoard' && tbl != 'Archive' && tbl != 'syncing_table',
+        )
+        .toList();
 
     if (tablesToResync.isEmpty) {
       SyncLogger.log('No user tables to resync');
@@ -657,7 +717,7 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
           'SELECT * FROM syncing_table WHERE entity_name = ?',
           [table],
         );
-        
+
         if (syncingEntry.isNotEmpty) {
           await tx.execute(
             'INSERT OR REPLACE INTO syncing_table_shadow (_id, entity_name, last_received_ts) VALUES (?, ?, NULL)',
@@ -667,14 +727,16 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
           // Create shadow table for entity with proper structure
           // First get the table structure
           final tableInfo = await tx.getAll('PRAGMA table_info("$table")');
-          final columns = tableInfo.map((col) {
-            final name = col['name'];
-            final type = col['type'];
-            final notNull = col['notnull'] == 1 ? 'NOT NULL' : '';
-            final pk = col['pk'] == 1 ? 'PRIMARY KEY' : '';
-            return '"$name" $type $notNull $pk';
-          }).join(', ');
-          
+          final columns = tableInfo
+              .map((col) {
+                final name = col['name'];
+                final type = col['type'];
+                final notNull = col['notnull'] == 1 ? 'NOT NULL' : '';
+                final pk = col['pk'] == 1 ? 'PRIMARY KEY' : '';
+                return '"$name" $type $notNull $pk';
+              })
+              .join(', ');
+
           await tx.execute('DROP TABLE IF EXISTS "${table}_shadow"');
           await tx.execute('CREATE TABLE "${table}_shadow" ($columns)');
         }
@@ -712,13 +774,20 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
     await _compareAndCleanup(db, shadowTables);
   }
 
-  Future<void> _syncTableIntoShadow(SqliteDatabase db, String tableName, String? initialTs) async {
+  Future<void> _syncTableIntoShadow(
+    SqliteDatabase db,
+    String tableName,
+    String? initialTs,
+  ) async {
     int pageSize = 1000;
     bool hasMore = true;
-    String? currentTs = initialTs ?? '';  // Convert null to empty string like normal sync does
+    String? currentTs =
+        initialTs ?? ''; // Convert null to empty string like normal sync does
 
     if (kDebugMode) {
-      SyncLogger.log('Starting shadow sync for $tableName with initialTs: $initialTs (using: $currentTs)');
+      SyncLogger.log(
+        'Starting shadow sync for $tableName with initialTs: $initialTs (using: $currentTs)',
+      );
     }
 
     while (hasMore && _db != null) {
@@ -730,11 +799,13 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
           onData: (resp) async {
             await db.writeTransaction((tx) async {
               final data = List<Map<String, dynamic>>.from(resp['data'] ?? []);
-              
+
               if (kDebugMode) {
-                SyncLogger.log('Shadow sync $tableName: received ${data.length} records');
+                SyncLogger.log(
+                  'Shadow sync $tableName: received ${data.length} records',
+                );
               }
-              
+
               if (data.isEmpty) {
                 hasMore = false;
                 return;
@@ -750,17 +821,18 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
                   .join(', ');
 
               // Insert data into shadow table
-              final sql = '''
+              final sql =
+                  '''
 INSERT INTO "${tableName}_shadow" (${cols.join(', ')}) VALUES ($placeholders)
 ON CONFLICT($pk) DO UPDATE SET $updates;
 ''';
-              
+
               final batch = data
                   .map<List<Object?>>(
                     (e) => cols.map<Object?>((c) => e[c]).toList(),
                   )
                   .toList();
-              
+
               await tx.executeBatch(sql, batch);
 
               // Update progress with last timestamp
@@ -788,8 +860,10 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
     }
   }
 
-  Future<void> _compareAndCleanup(SqliteDatabase db, List<Map<String, dynamic>> shadowTables) async {
-
+  Future<void> _compareAndCleanup(
+    SqliteDatabase db,
+    List<Map<String, dynamic>> shadowTables,
+  ) async {
     // Replace original tables with shadow tables
     await db.writeTransaction((tx) async {
       for (final shadowEntry in shadowTables) {
@@ -797,24 +871,42 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
 
         if (kDebugMode) {
           // Debug: count records in both tables
-          final originalCount = await tx.getAll('SELECT COUNT(*) as count FROM "$tableName"');
-          final shadowCount = await tx.getAll('SELECT COUNT(*) as count FROM "${tableName}_shadow"');
-          SyncLogger.log('$tableName - Original: ${originalCount[0]['count']} records, Shadow: ${shadowCount[0]['count']} records');
+          final originalCount = await tx.getAll(
+            'SELECT COUNT(*) as count FROM "$tableName"',
+          );
+          final shadowCount = await tx.getAll(
+            'SELECT COUNT(*) as count FROM "${tableName}_shadow"',
+          );
+          SyncLogger.log(
+            '$tableName - Original: ${originalCount[0]['count']} records, Shadow: ${shadowCount[0]['count']} records',
+          );
         }
 
         // Check for unsynced data one more time in this specific table
         final unsyncedCheck = await tx.getAll(
-          'SELECT 1 FROM "$tableName" WHERE is_unsynced = 1 LIMIT 1'
+          'SELECT 1 FROM "$tableName" WHERE is_unsynced = 1 LIMIT 1',
         );
-        
+
         if (unsyncedCheck.isNotEmpty) {
           if (kDebugMode) {
-            SyncLogger.log('Found unsynced data in $tableName, queueing sync and will resume RulesBoard processing');
+            SyncLogger.log(
+              'Found unsynced data in $tableName, queueing sync and will resume RulesBoard processing',
+            );
           }
           // Queue sending unsynced data for this table
-          _addToSyncQueue(SyncQueueItem(method: 'sendUnsynced', arguments: {'tableName': tableName}));
+          _addToSyncQueue(
+            SyncQueueItem(
+              method: 'sendUnsynced',
+              arguments: {'tableName': tableName},
+            ),
+          );
           // Queue processing RulesBoard again to resume after unsynced data is sent
-          _addToSyncQueue(SyncQueueItem(method: 'syncTable', arguments: {'tableName': 'RulesBoard'}));
+          _addToSyncQueue(
+            SyncQueueItem(
+              method: 'syncTable',
+              arguments: {'tableName': 'RulesBoard'},
+            ),
+          );
           continue;
         }
 
@@ -825,11 +917,11 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
         // Workaround: SQLite watch stream bug - DELETE without WHERE clause doesn't trigger watch
         // Adding WHERE 1=1 ensures the watch stream is notified of the deletion
         await tx.execute('DELETE FROM "$tableName" WHERE 1=1');
-        
+
         // Copy all data from shadow to original
         final columns = await tx.getAll('PRAGMA table_info("$tableName")');
         final columnNames = columns.map((c) => '"${c['name']}"').join(', ');
-        
+
         await tx.execute('''
           INSERT INTO "$tableName" ($columnNames)
           SELECT $columnNames FROM "${tableName}_shadow"
@@ -838,16 +930,16 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
         // Update syncing_table with last_received_ts from shadow
         final shadowSyncInfo = await tx.getAll(
           'SELECT last_received_ts FROM syncing_table_shadow WHERE entity_name = ?',
-          [tableName]
+          [tableName],
         );
-        
+
         if (shadowSyncInfo.isNotEmpty) {
           final shadowTs = shadowSyncInfo[0]['last_received_ts'];
           await tx.execute(
             'UPDATE syncing_table SET last_received_ts = ? WHERE entity_name = ?',
             [shadowTs, tableName],
           );
-          
+
           if (kDebugMode) {
             SyncLogger.log('Updated $tableName last_received_ts to: $shadowTs');
           }
@@ -859,7 +951,10 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
     await _dropShadowTables(db, shadowTables);
   }
 
-  Future<void> _dropShadowTables(SqliteDatabase db, List<Map<String, dynamic>> shadowTables) async {
+  Future<void> _dropShadowTables(
+    SqliteDatabase db,
+    List<Map<String, dynamic>> shadowTables,
+  ) async {
     await db.writeTransaction((tx) async {
       // Drop entity shadow tables
       for (final shadowEntry in shadowTables) {
@@ -876,9 +971,9 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
     final rows = await db.getAll(
       'select ${abstractMetaEntity.syncableColumnsString[tableName]} from $tableName where is_unsynced = 1',
     );
-    
+
     if (rows.isEmpty) return true; // Nothing to send, success
-    
+
     final uri = Uri.parse('$_serverUrl/data');
     final headers = {
       'Content-Type': 'application/json',
@@ -891,23 +986,22 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
     final res = await http.post(
       uri,
       headers: headers,
-      body: jsonEncode({
-        'name': tableName,
-        'data': jsonEncode(rows),
-      }),
+      body: jsonEncode({'name': tableName, 'data': jsonEncode(rows)}),
     );
-    
+
     if (res.statusCode != 200) {
-      SyncLogger.log('Failed to send unsynced for $tableName: ${res.statusCode}');
+      SyncLogger.log(
+        'Failed to send unsynced for $tableName: ${res.statusCode}',
+      );
       return false;
     }
-    
+
     // Check if data changed during send and mark as synced if not
     final success = await db.writeTransaction((tx) async {
       final rows2 = await tx.getAll(
         'select ${abstractMetaEntity.syncableColumnsString[tableName]} from $tableName where is_unsynced = 1',
       );
-      
+
       if (DeepCollectionEquality().equals(rows, rows2)) {
         await tx.execute(
           'update $tableName set is_unsynced = 0 where is_unsynced = 1',
@@ -918,67 +1012,162 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
         return false;
       }
     });
-    
+
     return success;
   }
 
   Future<void> _startSyncer() async {
-    if (_sseConnected) return;
-    final uri = Uri.parse('$_serverUrl/events');
-    final client = http.Client();
-    void handleError() {
-      _sseConnected = false;
-      _eventSubscription?.cancel();
-      Future.delayed(const Duration(seconds: 5), _startSyncer);
+    if (_socketConnected) return;
+    
+    // Parse the server URL to ensure it's properly formatted
+    String socketUrl = _serverUrl ?? '';
+    
+    // Remove trailing slashes
+    if (socketUrl.endsWith('/')) {
+      socketUrl = socketUrl.substring(0, socketUrl.length - 1);
     }
-
+    
+    // Parse URL to handle port issues
     try {
-      final request = http.Request('GET', uri)
-        ..headers['Accept'] = 'text/event-stream'
-        ..headers['appid'] = abstractSyncConstants.appId;
-      if (_authToken != null) {
-        request.headers['authorization'] = _authToken!;
-      }
-      final res = await client.send(request);
-      if (res.statusCode == 200) {
-        _sseConnected = true;
-        _addToSyncQueue(SyncQueueItem(method: 'fullSync'));
-        _eventSubscription = res.stream
-            .transform(utf8.decoder)
-            .transform(const LineSplitter())
-            .listen(
-              (e) {
-                if (e.startsWith('data:')) {
-                  // Extract table name from SSE message (format: "data: TableName")
-                  final tableName = e.substring(5).trim();
-                  if (tableName.isNotEmpty) {
-                    SyncLogger.log('SSE event for table: $tableName');
-                    _addToSyncQueue(SyncQueueItem(method: 'syncTable', arguments: {'tableName': tableName}));
-                  }
-                }
-              },
-              onError: (e) {
-                if (kDebugMode) {
-                  SyncLogger.log('SSE error: $e', error: e);
-                  handleError();
-                }
-              },
-            );
+      final uri = Uri.parse(socketUrl);
+      
+      // Build URL without explicit port for standard ports
+      // Socket.IO client will handle the default ports correctly
+      if (uri.hasPort && uri.port != 0 && 
+          !((uri.scheme == 'https' && uri.port == 443) || 
+            (uri.scheme == 'http' && uri.port == 80))) {
+        // Non-standard port, include it
+        socketUrl = '${uri.scheme}://${uri.host}:${uri.port}';
       } else {
-        handleError();
+        // Standard port or port 0, don't include port in URL
+        socketUrl = '${uri.scheme}://${uri.host}';
+      }
+      
+      // Remove any path segments
+      if (uri.pathSegments.isNotEmpty) {
+        // socketUrl already has just scheme://host[:port]
       }
     } catch (e) {
-      if (kDebugMode) {
-        SyncLogger.log('Error starting SSE: $e', error: e);
+      SyncLogger.log('Error parsing server URL: $e', error: e);
+    }
+    
+    // Log the URL being used
+    SyncLogger.log('Connecting to Socket.IO server at: $socketUrl');
+    
+    _socket = io.io(socketUrl, io.OptionBuilder()
+      .setTransports(['websocket', 'polling'])
+      .setAuth({
+        'token': _authToken,
+        'appId': abstractSyncConstants.appId,
+      })
+      .setExtraHeaders({
+        'authorization': _authToken ?? '',
+        'appid': abstractSyncConstants.appId,
+      })
+      .enableAutoConnect()
+      // Don't set path, let it use default
+      .build());
+
+    _socket!.onConnect((_) {
+      _socketConnected = true;
+      SyncLogger.log('Socket.IO connected');
+      _addToSyncQueue(SyncQueueItem(method: 'fullSync'));
+    });
+
+    _socket!.on('connected', (data) {
+      final isReconnection = data['reconnected'] ?? false;
+      SyncLogger.log('Socket ${isReconnection ? "reconnected" : "connected"} with data: $data');
+      
+      // On reconnection, might need to resync if we missed events
+      if (isReconnection) {
+        _addToSyncQueue(SyncQueueItem(method: 'fullSync'));
       }
-      handleError();
+    });
+
+    _socket!.on('dataChange', (data) {
+      final collection = data['collection'] as String?;
+      if (collection != null && collection.isNotEmpty) {
+        SyncLogger.log('Socket.IO dataChange event for collection: $collection');
+        _addToSyncQueue(
+          SyncQueueItem(
+            method: 'syncTable',
+            arguments: {'tableName': collection},
+          ),
+        );
+      }
+    });
+
+    _socket!.on('rulesUpdate', (data) {
+      SyncLogger.log('Socket.IO rulesUpdate event: $data');
+      final collections = data['fullResyncCollections'] as List<dynamic>?;
+      if (collections != null) {
+        // Process RulesBoard update - resync specified collections
+        _addToSyncQueue(
+          SyncQueueItem(
+            method: 'syncTable',
+            arguments: {'tableName': 'RulesBoard'},
+          ),
+        );
+      }
+    });
+
+    _socket!.on('syncTrigger', (data) {
+      final collections = data['collections'] as List<dynamic>?;
+      if (collections != null) {
+        for (final collection in collections) {
+          _addToSyncQueue(
+            SyncQueueItem(
+              method: 'syncTable',
+              arguments: {'tableName': collection.toString()},
+            ),
+          );
+        }
+      }
+    });
+
+    _socket!.onDisconnect((_) {
+      _socketConnected = false;
+      SyncLogger.log('Socket.IO disconnected');
+      // Attempt reconnection after delay
+      Future.delayed(const Duration(seconds: 5), () {
+        if (!_socketConnected && _socket != null) {
+          _socket!.connect();
+        }
+      });
+    });
+
+    _socket!.onConnectError((error) {
+      SyncLogger.log('Socket.IO connection error: $error', error: error);
+      
+      // Handle specific auth errors
+      if (error.toString().contains('MISSING_TOKEN')) {
+        SyncLogger.log('Authentication failed: Missing token');
+      } else if (error.toString().contains('INVALID_CREDENTIALS')) {
+        SyncLogger.log('Authentication failed: Invalid credentials');
+      } else if (error.toString().contains('MISSING_APP_ID')) {
+        SyncLogger.log('Authentication failed: Missing app ID');
+      }
+    });
+    
+    _socket!.onError((error) {
+      SyncLogger.log('Socket.IO error: $error', error: error);
+    });
+
+    _socket!.connect();
+  }
+
+  void _disconnectSocket() {
+    if (_socket != null) {
+      _socket!.disconnect();
+      _socket!.dispose();
+      _socket = null;
     }
   }
-  
+
   @override
   void dispose() {
     isProcessingQueue.dispose();
-    _eventSubscription?.cancel();
+    _disconnectSocket();
     _syncQueue.clear();
     isProcessingQueue.value = false;
     _db?.close();
@@ -1002,9 +1191,5 @@ class _TimestampResult {
   final String? timestamp;
   final String? error;
 
-  _TimestampResult({
-    required this.hasError,
-    this.timestamp,
-    this.error,
-  });
+  _TimestampResult({required this.hasError, this.timestamp, this.error});
 }
