@@ -1,3 +1,9 @@
+## 2.3.1
+
+* Fixed sync_generator to only include entities marked as `is_syncable: true`
+* This prevents local-only tables (like Settings) from being added to syncable collections
+* Resolves server errors for non-syncable entities
+
 ## 2.0.2
 
 * Fixed RulesBoard registration for empty collections

@@ -74,6 +74,7 @@ void main(List<String> args) async {
         : [];
     final List<dynamic> syncableEntities = entities
         .whereType<Map<String, dynamic>>()
+        .where((entity) => entity['is_syncable'] == true)
         .toList();
 
     final buffer = StringBuffer();
