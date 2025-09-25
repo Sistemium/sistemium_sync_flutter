@@ -655,7 +655,7 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
       return;
     }
 
-    // Fetch RulesBoard entries to process
+    // Fetch ALL RulesBoard entries to process
     final rulesEntries = await dbLocal.getAll(
       'SELECT * FROM RulesBoard ORDER BY ts ASC',
     );
@@ -665,44 +665,60 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
       return;
     }
 
-    // Process each RulesBoard entry
+    SyncLogger.log('Found ${rulesEntries.length} RulesBoard entries to process');
+
+    // Collect all unique table names from all entries
+    final Set<String> allTablesToResync = {};
+    final List<String> entryIds = [];
+
     for (final entry in rulesEntries) {
-      await _processRulesBoardEntry(dbLocal, entry);
+      entryIds.add(entry['_id'] as String);
+
+      final jsonStr = entry['fullResyncCollections'];
+      if (jsonStr == null) continue;
+
+      try {
+        final decoded = jsonDecode(jsonStr);
+        final tables = (decoded as List).whereType<String>().toList();
+
+        // Filter out system tables and add to set
+        for (final table in tables) {
+          if (table != 'RulesBoard' &&
+              table != 'Archive' &&
+              table != 'syncing_table') {
+            allTablesToResync.add(table);
+          }
+        }
+      } catch (e) {
+        SyncLogger.log('Failed to parse fullResyncCollections for entry ${entry['_id']}: $e');
+      }
     }
+
+    if (allTablesToResync.isEmpty) {
+      SyncLogger.log('No user tables to resync from all RulesBoard entries');
+      // Still delete the processed entries
+      await dbLocal.writeTransaction((tx) async {
+        for (final id in entryIds) {
+          await tx.execute('DELETE FROM RulesBoard WHERE _id = ?', [id]);
+        }
+      });
+      return;
+    }
+
+    SyncLogger.log('Unique tables to resync: ${allTablesToResync.join(', ')}');
+
+    // Process all unique tables at once
+    await _processRulesBoardTables(dbLocal, allTablesToResync.toList(), entryIds);
   }
 
-  Future<void> _processRulesBoardEntry(
+  Future<void> _processRulesBoardTables(
     SqliteDatabase db,
-    Map<String, dynamic> entry,
+    List<String> tablesToResync,
+    List<String> entryIds,
   ) async {
-    SyncLogger.log('Processing entry: $entry');
+    SyncLogger.log('Processing ${tablesToResync.length} unique tables from ${entryIds.length} RulesBoard entries');
 
-    final jsonStr = entry['fullResyncCollections'];
-    if (jsonStr == null) return;
-
-    List<String> tablesToResync;
-    try {
-      final decoded = jsonDecode(jsonStr);
-      tablesToResync = (decoded as List).whereType<String>().toList();
-    } catch (_) {
-      SyncLogger.log('Failed to parse fullResyncCollections');
-      return;
-    }
-
-    // Filter out system tables
-    tablesToResync = tablesToResync
-        .where(
-          (tbl) =>
-              tbl != 'RulesBoard' && tbl != 'Archive' && tbl != 'syncing_table',
-        )
-        .toList();
-
-    if (tablesToResync.isEmpty) {
-      SyncLogger.log('No user tables to resync');
-      return;
-    }
-
-    // Step 4: Create shadow tables
+    // Step 4: Create shadow tables for all unique tables
     await db.writeTransaction((tx) async {
       // Create shadow syncing_table
       await tx.execute('''
@@ -744,8 +760,10 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
         }
       }
 
-      // Step 5: Delete the RulesBoard entry we're processing
-      await tx.execute('DELETE FROM RulesBoard WHERE _id = ?', [entry['_id']]);
+      // Step 5: Delete ALL processed RulesBoard entries at once
+      for (final id in entryIds) {
+        await tx.execute('DELETE FROM RulesBoard WHERE _id = ?', [id]);
+      }
     });
 
     // Step 6: Process shadow sync
