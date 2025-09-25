@@ -14,6 +14,8 @@ import 'package:sqlite_async/sqlite3.dart';
 import 'package:sqlite_async/sqlite3_common.dart';
 import 'package:sqlite_async/sqlite_async.dart';
 
+const int _fetchPageSize = 10000;
+
 // Queue item for sync operations
 class SyncQueueItem {
   final String method;
@@ -423,7 +425,7 @@ class BackendNotifier extends ChangeNotifier {
     }
 
     final table = syncingInfo.first;
-    int page = 10000;
+    int page = _fetchPageSize;
     bool more = true;
     String? ts = table['last_received_ts']?.toString() ?? '';
 
@@ -779,7 +781,7 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
     String tableName,
     String? initialTs,
   ) async {
-    int pageSize = 1000;
+    int pageSize = _fetchPageSize;
     bool hasMore = true;
     String? currentTs =
         initialTs ?? ''; // Convert null to empty string like normal sync does
