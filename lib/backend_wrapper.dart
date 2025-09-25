@@ -225,7 +225,7 @@ class BackendNotifier extends ChangeNotifier {
       ON CONFLICT(_id) DO UPDATE SET $updatePlaceholders, is_unsynced = 1
     ''';
     await db!.execute(sql, [...values, ...values]);
-    if (tx == null) {
+    if (tx == null && abstractMetaEntity.syncableColumnsList.containsKey(tableName)) {
       _addToSyncQueue(
         SyncQueueItem(
           method: 'sendUnsynced',
@@ -242,14 +242,16 @@ class BackendNotifier extends ChangeNotifier {
     if (_db == null) throw Exception('Database not initialized');
     final result = await _db!.writeTransaction(callback);
 
-    // Queue sync for each affected table
+    // Queue sync only for syncable tables
     for (final tableName in affectedTables) {
-      _addToSyncQueue(
-        SyncQueueItem(
-          method: 'sendUnsynced',
-          arguments: {'tableName': tableName},
-        ),
-      );
+      if (abstractMetaEntity.syncableColumnsList.containsKey(tableName)) {
+        _addToSyncQueue(
+          SyncQueueItem(
+            method: 'sendUnsynced',
+            arguments: {'tableName': tableName},
+          ),
+        );
+      }
     }
 
     return result;
