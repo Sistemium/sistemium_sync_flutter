@@ -88,8 +88,6 @@ void main(List<String> args) async {
     buffer.writeln('class SyncConstants extends AbstractSyncConstants {');
     buffer.writeln("  @override");
     buffer.writeln("  final String appId = '$targetAppId';");
-    buffer.writeln("  @override");
-    buffer.writeln("  final String serverUrl = '$constantsServerUrl';");
     buffer.writeln('}');
     buffer.writeln();
 

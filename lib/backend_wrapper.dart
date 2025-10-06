@@ -68,11 +68,11 @@ class BackendNotifier extends ChangeNotifier {
   }
 
   Future<void> initDb({
-    String? serverUrl,
+    required String serverUrl,
     required String userId,
     String? authToken,
   }) async {
-    _serverUrl = serverUrl ?? abstractSyncConstants.serverUrl;
+    _serverUrl = serverUrl;
     this.userId = userId;
     _authToken = authToken;
     final tempDb = await _openDatabase();
