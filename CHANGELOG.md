@@ -1,3 +1,11 @@
+## 2.5.7
+
+* Add complete sqlite_async API wrappers for all query and transaction methods
+* Add executeBatch() for batch SQL execution
+* Add get() and getOptional() for single row queries
+* Add readTransaction() for read-only transactions
+* All methods now exposed through BackendNotifier wrapper
+
 ## 2.5.6
 
 * Simplify wrapper methods to directly passthrough to sqlite_async

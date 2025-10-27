@@ -223,6 +223,28 @@ class BackendNotifier extends ChangeNotifier {
     await _db!.execute(sql, parameters);
   }
 
+  Future<void> executeBatch(String sql, List<List<Object?>> parameterSets) async {
+    if (_db == null) throw Exception('Database not initialized');
+    await _db!.executeBatch(sql, parameterSets);
+  }
+
+  Future<Row?> get(String sql, [List<Object?>? parameters]) async {
+    if (_db == null) throw Exception('Database not initialized');
+    return _db!.get(sql, parameters);
+  }
+
+  Future<Row?> getOptional(String sql, [List<Object?>? parameters]) async {
+    if (_db == null) throw Exception('Database not initialized');
+    return _db!.getOptional(sql, parameters);
+  }
+
+  Future<T> readTransaction<T>(
+    Future<T> Function(SqliteReadContext tx) callback,
+  ) async {
+    if (_db == null) throw Exception('Database not initialized');
+    return _db!.readTransaction(callback);
+  }
+
   Future<void> write({
     required String tableName,
     required Map data,
