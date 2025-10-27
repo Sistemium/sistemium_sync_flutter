@@ -204,32 +204,23 @@ class BackendNotifier extends ChangeNotifier {
   }
 
   Stream<List> watch(
-    String sql, {
+    String sql, [
     List<Object?>? parameters,
+  ], {
     required List<String> triggerOnTables,
   }) {
     if (_db == null) throw Exception('Database not initialized');
-    if (parameters == null) {
-      return _db!.watch(sql, triggerOnTables: triggerOnTables);
-    }
     return _db!.watch(sql, parameters, triggerOnTables: triggerOnTables);
   }
 
   Future<ResultSet> getAll(String sql, [List<Object?>? parameters]) {
     if (_db == null) throw Exception('Database not initialized');
-    if (parameters == null) {
-      return _db!.getAll(sql);
-    }
     return _db!.getAll(sql, parameters);
   }
 
   Future<void> execute(String sql, [List<Object?>? parameters]) async {
     if (_db == null) throw Exception('Database not initialized');
-    if (parameters == null) {
-      await _db!.execute(sql);
-    } else {
-      await _db!.execute(sql, parameters);
-    }
+    await _db!.execute(sql, parameters);
   }
 
   Future<void> write({

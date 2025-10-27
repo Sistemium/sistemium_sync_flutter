@@ -1,3 +1,9 @@
+## 2.5.6
+
+* Simplify wrapper methods to directly passthrough to sqlite_async
+* Remove unnecessary conditional logic in getAll(), watch(), and execute()
+* Methods now match sqlite_async API signatures exactly
+
 ## 2.5.5
 
 * Add isInitialized getter to check if database is ready
