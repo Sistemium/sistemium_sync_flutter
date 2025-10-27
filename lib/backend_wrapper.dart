@@ -1019,6 +1019,34 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
       return false;
     }
 
+    // Parse response to extract ts values (if server provides them)
+    Map<String, String> tsMap = {};
+    try {
+      final responseBody = jsonDecode(res.body);
+      if (responseBody is Map && responseBody['resuts'] is List) {
+        for (final result in responseBody['resuts']) {
+          if (result is Map &&
+              result['_id'] != null &&
+              result['ts'] != null &&
+              result['ignored'] != true) {
+            // Only use ts if it's not an ignored/conflict entry
+            tsMap[result['_id'].toString()] = result['ts'].toString();
+          }
+        }
+        if (tsMap.isNotEmpty) {
+          SyncLogger.log(
+            'Received ${tsMap.length} ts values from server for $tableName',
+          );
+        }
+      }
+    } catch (e) {
+      // If response parsing fails, just continue without ts updates
+      // This handles old server versions or unexpected response formats
+      SyncLogger.log(
+        'Could not parse ts from response (old server?): $e',
+      );
+    }
+
     // Check if data changed during send and mark as synced if not
     final success = await db.writeTransaction((tx) async {
       final rows2 = await tx.getAll(
@@ -1026,6 +1054,17 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
       );
 
       if (DeepCollectionEquality().equals(rows, rows2)) {
+        // Update ts for each document that has one from server
+        for (final entry in tsMap.entries) {
+          final id = entry.key;
+          final ts = entry.value;
+          await tx.execute(
+            'UPDATE $tableName SET ts = ? WHERE _id = ?',
+            [ts, id],
+          );
+        }
+
+        // Mark all as synced
         await tx.execute(
           'update $tableName set is_unsynced = 0 where is_unsynced = 1',
         );
