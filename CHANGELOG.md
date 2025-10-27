@@ -1,3 +1,12 @@
+## 2.5.2
+
+* Update local ts values from server POST responses
+* Client now extracts ts values from successful sync operations
+* Improves optimistic concurrency control by keeping local timestamps in sync
+* Gracefully handles old server versions that don't return ts
+* Skips ts updates for conflict responses (ignored: true)
+* Reduces need to re-download data just to get timestamps
+
 ## 2.3.1
 
 * Fixed sync_generator to only include entities marked as `is_syncable: true`
