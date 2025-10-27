@@ -214,8 +214,12 @@ class BackendNotifier extends ChangeNotifier {
   }) async {
     final db = tx ?? _db;
     if (data['_id'] == null) data['_id'] = ObjectId().hexString;
-    final columns = data.keys.toList();
-    final values = data.values.toList();
+
+    // Remove ts field if user tries to set it - only server can set ts
+    final sanitizedData = Map.from(data)..remove('ts');
+
+    final columns = sanitizedData.keys.toList();
+    final values = sanitizedData.values.toList();
     final placeholders = List.filled(columns.length, '?').join(', ');
     final updatePlaceholders = columns.map((c) => '$c = ?').join(', ');
     final sql =

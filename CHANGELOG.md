@@ -1,3 +1,9 @@
+## 2.5.3
+
+* SECURITY: Remove ts field from user-provided data in write() method
+* Users can no longer override ts timestamps - only server controls ts values
+* Prevents potential timestamp manipulation and ensures data integrity
+
 ## 2.5.2
 
 * Update local ts values from server POST responses
