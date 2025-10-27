@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:collection/collection.dart';
 import 'package:flutter/foundation.dart' show kIsWeb, kDebugMode, compute;
-import 'package:flutter/material.dart';
+import 'package:flutter/material.dart' hide Row;
 import 'package:http/http.dart' as http;
 import 'package:objectid/objectid.dart';
 import 'package:path/path.dart' as p;
@@ -204,23 +204,32 @@ class BackendNotifier extends ChangeNotifier {
   }
 
   Stream<List> watch(
-    String sql, [
+    String sql, {
     List<Object?>? parameters,
-  ], {
     required List<String> triggerOnTables,
   }) {
     if (_db == null) throw Exception('Database not initialized');
-    return _db!.watch(sql, parameters, triggerOnTables: triggerOnTables);
+    if (parameters == null) {
+      return _db!.watch(sql, triggerOnTables: triggerOnTables);
+    }
+    return _db!.watch(sql, parameters: parameters, triggerOnTables: triggerOnTables);
   }
 
   Future<ResultSet> getAll(String sql, [List<Object?>? parameters]) {
     if (_db == null) throw Exception('Database not initialized');
+    if (parameters == null) {
+      return _db!.getAll(sql);
+    }
     return _db!.getAll(sql, parameters);
   }
 
   Future<void> execute(String sql, [List<Object?>? parameters]) async {
     if (_db == null) throw Exception('Database not initialized');
-    await _db!.execute(sql, parameters);
+    if (parameters == null) {
+      await _db!.execute(sql);
+    } else {
+      await _db!.execute(sql, parameters);
+    }
   }
 
   Future<void> executeBatch(String sql, List<List<Object?>> parameterSets) async {
@@ -230,11 +239,17 @@ class BackendNotifier extends ChangeNotifier {
 
   Future<Row?> get(String sql, [List<Object?>? parameters]) async {
     if (_db == null) throw Exception('Database not initialized');
+    if (parameters == null) {
+      return _db!.get(sql);
+    }
     return _db!.get(sql, parameters);
   }
 
   Future<Row?> getOptional(String sql, [List<Object?>? parameters]) async {
     if (_db == null) throw Exception('Database not initialized');
+    if (parameters == null) {
+      return _db!.getOptional(sql);
+    }
     return _db!.getOptional(sql, parameters);
   }
 
