@@ -60,6 +60,9 @@ class BackendNotifier extends ChangeNotifier {
     required this.abstractMetaEntity,
   });
 
+  // DEPRECATED: Direct database access is now forbidden
+  // Use wrapper methods: getAll(), watch(), execute() instead
+  @Deprecated('Use wrapper methods instead of direct db access')
   SqliteDatabase? get db => _db;
 
   // Single helper for JSON parsing in isolate
@@ -196,15 +199,33 @@ class BackendNotifier extends ChangeNotifier {
     });
   }
 
-  Stream<List> watch({
-    required String sql,
+  Stream<List> watch(
+    String sql, {
+    List<Object?>? parameters,
     required List<String> triggerOnTables,
   }) {
-    return _db!.watch(sql, triggerOnTables: triggerOnTables);
+    if (_db == null) throw Exception('Database not initialized');
+    if (parameters == null) {
+      return _db!.watch(sql, triggerOnTables: triggerOnTables);
+    }
+    return _db!.watch(sql, parameters, triggerOnTables: triggerOnTables);
   }
 
-  Future<ResultSet> getAll({required String sql}) {
-    return _db!.getAll(sql);
+  Future<ResultSet> getAll(String sql, [List<Object?>? parameters]) {
+    if (_db == null) throw Exception('Database not initialized');
+    if (parameters == null) {
+      return _db!.getAll(sql);
+    }
+    return _db!.getAll(sql, parameters);
+  }
+
+  Future<void> execute(String sql, [List<Object?>? parameters]) async {
+    if (_db == null) throw Exception('Database not initialized');
+    if (parameters == null) {
+      await _db!.execute(sql);
+    } else {
+      await _db!.execute(sql, parameters);
+    }
   }
 
   Future<void> write({

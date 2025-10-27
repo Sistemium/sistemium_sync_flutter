@@ -1,3 +1,12 @@
+## 2.5.4
+
+* Add complete wrapper methods for database access
+* Add execute() method for raw SQL execution with parameter binding
+* Update getAll() to support optional parameter binding
+* Update watch() to support optional parameter binding
+* Deprecate direct db access - all operations should use wrapper methods
+* Improves API safety and encapsulation
+
 ## 2.5.3
 
 * SECURITY: Remove ts field from user-provided data in write() method
