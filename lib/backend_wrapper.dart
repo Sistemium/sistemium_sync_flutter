@@ -65,6 +65,10 @@ class BackendNotifier extends ChangeNotifier {
   @Deprecated('Use wrapper methods instead of direct db access')
   SqliteDatabase? get db => _db;
 
+  /// Check if database has been initialized
+  /// Use this instead of `backend.db != null`
+  bool get isInitialized => _db != null;
+
   // Single helper for JSON parsing in isolate
   static Map<String, dynamic> _parseJsonInIsolate(String body) {
     return jsonDecode(body) as Map<String, dynamic>;

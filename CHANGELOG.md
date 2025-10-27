@@ -1,3 +1,9 @@
+## 2.5.5
+
+* Add isInitialized getter to check if database is ready
+* Use backend.isInitialized instead of backend.db != null
+* Provides clean API without accessing deprecated db getter
+
 ## 2.5.4
 
 * Add complete wrapper methods for database access
