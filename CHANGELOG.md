@@ -1,3 +1,11 @@
+## 2.5.9
+
+* FIX: Add onDone handler to SSE stream listener for proper disconnect detection
+* FIX: Store and properly close http.Client to prevent memory leaks
+* FIX: Close http.Client in handleError, deinitDb, and dispose
+* FIX: Add cancelOnError: false to stream listener for better error recovery
+* Log when SSE stream is closed by server
+
 ## 2.5.8
 
 * Add comprehensive SSE connection logging

@@ -44,6 +44,7 @@ class BackendNotifier extends ChangeNotifier {
   SqliteDatabase? _db;
   bool _sseConnected = false;
   StreamSubscription? _eventSubscription;
+  http.Client? _sseClient;
   String? _serverUrl;
   String? userId;
   String? _authToken;
@@ -97,6 +98,8 @@ class BackendNotifier extends ChangeNotifier {
   Future<void> deinitDb() async {
     await _eventSubscription?.cancel();
     _eventSubscription = null;
+    _sseClient?.close();
+    _sseClient = null;
     _sseConnected = false;
 
     // Cancel all retry timers
@@ -1138,11 +1141,18 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
   Future<void> _startSyncer() async {
     if (_sseConnected) return;
     final uri = Uri.parse('$_serverUrl/events');
-    final client = http.Client();
+
+    // Close previous client if exists
+    _sseClient?.close();
+    _sseClient = http.Client();
+
     void handleError() {
       SyncLogger.log('SSE connection lost, retrying in 5 seconds...');
       _sseConnected = false;
       _eventSubscription?.cancel();
+      _eventSubscription = null;
+      _sseClient?.close();
+      _sseClient = null;
       Future.delayed(const Duration(seconds: 5), _startSyncer);
     }
 
@@ -1153,7 +1163,7 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
       if (_authToken != null) {
         request.headers['authorization'] = _authToken!;
       }
-      final res = await client.send(request);
+      final res = await _sseClient!.send(request);
       if (res.statusCode == 200) {
         _sseConnected = true;
         SyncLogger.log('SSE connected successfully to $_serverUrl/events');
@@ -1178,9 +1188,14 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
                 }
               },
               onError: (e) {
-                SyncLogger.log('SSE error: $e', error: e);
+                SyncLogger.log('SSE stream error: $e', error: e);
                 handleError();
               },
+              onDone: () {
+                SyncLogger.log('SSE stream closed by server');
+                handleError();
+              },
+              cancelOnError: false,
             );
       } else {
         SyncLogger.log('SSE connection failed with status ${res.statusCode}');
@@ -1196,6 +1211,7 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
   void dispose() {
     isProcessingQueue.dispose();
     _eventSubscription?.cancel();
+    _sseClient?.close();
     _syncQueue.clear();
     isProcessingQueue.value = false;
     _db?.close();
