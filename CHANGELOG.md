@@ -1,3 +1,11 @@
+## 2.5.8
+
+* Add comprehensive SSE connection logging
+* Log when SSE connects successfully
+* Log when SSE connection fails with status code
+* Log when SSE connection is lost and retrying
+* Remove debug-only check from catch block for better error visibility
+
 ## 2.5.7
 
 * Add complete sqlite_async API wrappers for all query and transaction methods

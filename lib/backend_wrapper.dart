@@ -1140,6 +1140,7 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
     final uri = Uri.parse('$_serverUrl/events');
     final client = http.Client();
     void handleError() {
+      SyncLogger.log('SSE connection lost, retrying in 5 seconds...');
       _sseConnected = false;
       _eventSubscription?.cancel();
       Future.delayed(const Duration(seconds: 5), _startSyncer);
@@ -1155,6 +1156,7 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
       final res = await client.send(request);
       if (res.statusCode == 200) {
         _sseConnected = true;
+        SyncLogger.log('SSE connected successfully to $_serverUrl/events');
         _addToSyncQueue(SyncQueueItem(method: 'fullSync'));
         _eventSubscription = res.stream
             .transform(utf8.decoder)
@@ -1181,12 +1183,11 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
               },
             );
       } else {
+        SyncLogger.log('SSE connection failed with status ${res.statusCode}');
         handleError();
       }
     } catch (e) {
-      if (kDebugMode) {
-        SyncLogger.log('Error starting SSE: $e', error: e);
-      }
+      SyncLogger.log('Error starting SSE: $e', error: e);
       handleError();
     }
   }
