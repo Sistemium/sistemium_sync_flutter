@@ -399,7 +399,9 @@ class BackendNotifier extends ChangeNotifier {
       final data = await compute(_parseJsonInIsolate, res.body);
       await onData(data);
     } else {
-      throw Exception('Failed to fetch data');
+      SyncLogger.log('HTTP Error ${res.statusCode} for $uri');
+      SyncLogger.log('Response body: ${res.body}');
+      throw Exception('Failed to fetch data: HTTP ${res.statusCode} - ${res.body}');
     }
   }
 
