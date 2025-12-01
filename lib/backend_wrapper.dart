@@ -398,15 +398,8 @@ class BackendNotifier extends ChangeNotifier {
     final res = await http.get(uri, headers: headers);
     SyncLogger.log('[$name] _fetchData: Response status ${res.statusCode}, body length: ${res.body.length}');
     if (res.statusCode == 200) {
-      // Only use isolate for large payloads (>100KB) to avoid isolate overhead
-      Map<String, dynamic> data;
-      if (res.body.length > 100000) {
-        SyncLogger.log('[$name] _fetchData: Parsing large response (${res.body.length} bytes) in isolate...');
-        data = await compute(_parseJsonInIsolate, res.body);
-      } else {
-        SyncLogger.log('[$name] _fetchData: Parsing response directly...');
-        data = jsonDecode(res.body) as Map<String, dynamic>;
-      }
+      SyncLogger.log('[$name] _fetchData: Parsing response in isolate...');
+      final data = await compute(_parseJsonInIsolate, res.body);
       SyncLogger.log('[$name] _fetchData: Parse complete, data keys: ${data.keys.toList()}, data count: ${(data['data'] as List?)?.length ?? 0}');
       SyncLogger.log('[$name] _fetchData: Calling onData callback...');
       await onData(data);
