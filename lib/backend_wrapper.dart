@@ -394,10 +394,15 @@ class BackendNotifier extends ChangeNotifier {
       headers['authorization'] = _authToken!;
     }
 
+    SyncLogger.log('[$name] _fetchData: GET $uri');
     final res = await http.get(uri, headers: headers);
+    SyncLogger.log('[$name] _fetchData: Response status ${res.statusCode}, body length: ${res.body.length}');
     if (res.statusCode == 200) {
+      SyncLogger.log('[$name] _fetchData: Parsing response in isolate...');
       final data = await compute(_parseJsonInIsolate, res.body);
+      SyncLogger.log('[$name] _fetchData: Parse complete, calling onData callback...');
       await onData(data);
+      SyncLogger.log('[$name] _fetchData: onData callback complete');
     } else {
       SyncLogger.log('HTTP Error ${res.statusCode} for $uri');
       SyncLogger.log('Response body: ${res.body}');
@@ -459,10 +464,13 @@ class BackendNotifier extends ChangeNotifier {
     SyncLogger.log('Starting sync for table: $tableName');
 
     // First send any unsynced data for this table
+    SyncLogger.log('[$tableName] Step 1: Sending unsynced data...');
     bool sendSuccess = false;
     int retryCount = 0;
     while (!sendSuccess && retryCount < 3) {
+      SyncLogger.log('[$tableName] Calling _sendUnsyncedForTable (attempt ${retryCount + 1})...');
       sendSuccess = await _sendUnsyncedForTable(tableName);
+      SyncLogger.log('[$tableName] _sendUnsyncedForTable returned: $sendSuccess');
       if (!sendSuccess) {
         retryCount++;
         SyncLogger.log(
@@ -477,8 +485,10 @@ class BackendNotifier extends ChangeNotifier {
       );
       return;
     }
+    SyncLogger.log('[$tableName] Step 1 complete: Unsynced data sent');
 
     // Get the last received timestamp for this table
+    SyncLogger.log('[$tableName] Step 2: Getting last_received_ts from syncing_table...');
     final syncingInfo = await _db!.getAll(
       'SELECT * FROM syncing_table WHERE entity_name = ?',
       [tableName],
@@ -494,10 +504,11 @@ class BackendNotifier extends ChangeNotifier {
     bool more = true;
     String? ts = table['last_received_ts']?.toString() ?? '';
 
-    SyncLogger.log('Initial TS for $tableName: $ts');
+    SyncLogger.log('[$tableName] Step 2 complete: Initial TS = "$ts"');
+    SyncLogger.log('[$tableName] Step 3: Starting fetch loop...');
 
     while (more && _db != null) {
-      SyncLogger.log('Fetching $tableName with ts: $ts, page: $page');
+      SyncLogger.log('[$tableName] Fetching with ts: "$ts", page: $page');
       await _fetchData(
         name: tableName,
         lastReceivedTs: ts,
@@ -600,8 +611,22 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
       );
 
       // Sync each table (including Archive and RulesBoard which will be processed internally)
+      int tableIndex = 0;
       for (var table in tables) {
-        await syncTable(table['entity_name']);
+        tableIndex++;
+        final tableName = table['entity_name'] as String;
+        SyncLogger.log('>>> SYNC [$tableIndex/${tables.length}] Starting: $tableName');
+        try {
+          await syncTable(tableName);
+          SyncLogger.log('>>> SYNC [$tableIndex/${tables.length}] Completed: $tableName');
+        } catch (e, stackTrace) {
+          SyncLogger.log(
+            '>>> SYNC [$tableIndex/${tables.length}] FAILED: $tableName - $e',
+            error: e,
+            stackTrace: stackTrace,
+          );
+          // Continue with next table instead of stopping entire sync
+        }
       }
 
       SyncLogger.log('End of sync cycle');
@@ -1053,11 +1078,16 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
 
   Future<bool> _sendUnsyncedForTable(String tableName) async {
     final db = _db!;
+    SyncLogger.log('[$tableName] _sendUnsyncedForTable: Querying unsynced rows...');
     final rows = await db.getAll(
       'select ${abstractMetaEntity.syncableColumnsString[tableName]} from $tableName where is_unsynced = 1',
     );
+    SyncLogger.log('[$tableName] _sendUnsyncedForTable: Found ${rows.length} unsynced rows');
 
-    if (rows.isEmpty) return true; // Nothing to send, success
+    if (rows.isEmpty) {
+      SyncLogger.log('[$tableName] _sendUnsyncedForTable: No unsynced data, returning success');
+      return true; // Nothing to send, success
+    }
 
     final uri = Uri.parse('$_serverUrl/data');
     final headers = {
@@ -1068,16 +1098,19 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
       headers['authorization'] = _authToken!;
     }
 
+    SyncLogger.log('[$tableName] _sendUnsyncedForTable: POSTing ${rows.length} rows to server...');
     final res = await http.post(
       uri,
       headers: headers,
       body: jsonEncode({'name': tableName, 'data': jsonEncode(rows)}),
     );
+    SyncLogger.log('[$tableName] _sendUnsyncedForTable: POST response status: ${res.statusCode}');
 
     if (res.statusCode != 200) {
       SyncLogger.log(
         'Failed to send unsynced for $tableName: ${res.statusCode}',
       );
+      SyncLogger.log('[$tableName] Response body: ${res.body}');
       return false;
     }
 
