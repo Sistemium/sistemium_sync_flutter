@@ -398,9 +398,17 @@ class BackendNotifier extends ChangeNotifier {
     final res = await http.get(uri, headers: headers);
     SyncLogger.log('[$name] _fetchData: Response status ${res.statusCode}, body length: ${res.body.length}');
     if (res.statusCode == 200) {
-      SyncLogger.log('[$name] _fetchData: Parsing response in isolate...');
-      final data = await compute(_parseJsonInIsolate, res.body);
-      SyncLogger.log('[$name] _fetchData: Parse complete, calling onData callback...');
+      // Only use isolate for large payloads (>100KB) to avoid isolate overhead
+      Map<String, dynamic> data;
+      if (res.body.length > 100000) {
+        SyncLogger.log('[$name] _fetchData: Parsing large response (${res.body.length} bytes) in isolate...');
+        data = await compute(_parseJsonInIsolate, res.body);
+      } else {
+        SyncLogger.log('[$name] _fetchData: Parsing response directly...');
+        data = jsonDecode(res.body) as Map<String, dynamic>;
+      }
+      SyncLogger.log('[$name] _fetchData: Parse complete, data keys: ${data.keys.toList()}, data count: ${(data['data'] as List?)?.length ?? 0}');
+      SyncLogger.log('[$name] _fetchData: Calling onData callback...');
       await onData(data);
       SyncLogger.log('[$name] _fetchData: onData callback complete');
     } else {
@@ -514,22 +522,21 @@ class BackendNotifier extends ChangeNotifier {
         lastReceivedTs: ts,
         pageSize: page,
         onData: (resp) async {
-          SyncLogger.log('Got response for $tableName, starting transaction');
+          SyncLogger.log('[$tableName] onData: Got response, starting transaction');
           await _db!.writeTransaction((tx) async {
             // Check for new unsynced data that appeared during fetch
-            SyncLogger.log('Checking unsynced in $tableName');
+            SyncLogger.log('[$tableName] onData: Checking unsynced...');
             final unsynced = await tx.getAll(
               'select * from $tableName where is_unsynced = 1',
             );
             SyncLogger.log(
-              'Unsynced check complete for $tableName: ${unsynced.length} records',
+              '[$tableName] onData: Unsynced check complete: ${unsynced.length} records',
             );
 
             if (unsynced.isNotEmpty) {
               SyncLogger.log(
-                'Found ${unsynced.length} unsynced records in $tableName',
+                '[$tableName] onData: Found ${unsynced.length} unsynced records, requeueing',
               );
-              SyncLogger.log('First unsynced: ${unsynced.first}');
               more = false;
               // Add table sync back to queue to handle the new unsynced data
               _addToSyncQueue(
@@ -541,11 +548,10 @@ class BackendNotifier extends ChangeNotifier {
               return;
             }
 
-            SyncLogger.log('Syncing $tableName');
-            SyncLogger.log('Last received TS: $ts');
-            SyncLogger.log('Received ${resp['data']?.length ?? 0} rows');
+            SyncLogger.log('[$tableName] onData: Processing ${resp['data']?.length ?? 0} rows');
 
             if ((resp['data']?.length ?? 0) == 0) {
+              SyncLogger.log('[$tableName] onData: No data received, stopping fetch');
               more = false;
               return;
             }
@@ -563,29 +569,36 @@ INSERT INTO $tableName (${cols.join(', ')}) VALUES ($placeholders)
 ON CONFLICT($pk) DO UPDATE SET $updates;
 ''';
             final data = List<Map<String, dynamic>>.from(resp['data']);
-            SyncLogger.log('Last ts in response: ${data.last['ts']}');
+            SyncLogger.log('[$tableName] onData: Inserting ${data.length} rows, last ts: ${data.last['ts']}');
 
             final batch = data
                 .map<List<Object?>>(
                   (e) => cols.map<Object?>((c) => e[c]).toList(),
                 )
                 .toList();
+            SyncLogger.log('[$tableName] onData: Executing batch insert...');
             await tx.executeBatch(sql, batch);
+            SyncLogger.log('[$tableName] onData: Batch insert complete');
 
+            SyncLogger.log('[$tableName] onData: Updating syncing_table...');
             await tx.execute(
               'UPDATE syncing_table SET last_received_ts = ? WHERE entity_name = ?',
               [data.last['ts'], tableName],
             );
+            SyncLogger.log('[$tableName] onData: syncing_table updated');
 
             if (data.length < page) {
               more = false;
+              SyncLogger.log('[$tableName] onData: Last page received (${data.length} < $page)');
             } else {
               ts = data.last['ts'];
+              SyncLogger.log('[$tableName] onData: More pages expected, next ts: $ts');
             }
           });
+          SyncLogger.log('[$tableName] onData: Transaction complete');
         },
       );
-      SyncLogger.log('Fetch complete for $tableName, more: $more');
+      SyncLogger.log('[$tableName] Fetch iteration complete, more: $more');
     }
 
     // Process special tables after sync
