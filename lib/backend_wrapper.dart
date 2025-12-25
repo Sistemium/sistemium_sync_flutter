@@ -280,7 +280,7 @@ class BackendNotifier extends ChangeNotifier {
     final updatePlaceholders = columns.map((c) => '$c = ?').join(', ');
     final sql =
         '''
-      INSERT INTO $tableName (${columns.join(', ')}, is_unsynced)
+      INSERT INTO "$tableName" (${columns.join(', ')}, is_unsynced)
       VALUES ($placeholders, 1)
       ON CONFLICT(_id) DO UPDATE SET $updatePlaceholders, is_unsynced = 1
     ''';
