@@ -320,7 +320,7 @@ class BackendNotifier extends ChangeNotifier {
   Future<void> delete({required String tableName, required String id}) async {
     await _db!.writeTransaction((tx) async {
       // First get the document data before deleting
-      final docs = await tx.getAll('SELECT * FROM $tableName WHERE _id = ?', [
+      final docs = await tx.getAll('SELECT * FROM "$tableName" WHERE _id = ?', [
         id,
       ]);
 
@@ -331,7 +331,7 @@ class BackendNotifier extends ChangeNotifier {
       final docData = docs.first;
 
       // Delete the original document
-      await tx.execute('DELETE FROM $tableName WHERE _id = ?', [id]);
+      await tx.execute('DELETE FROM "$tableName" WHERE _id = ?', [id]);
 
       // Create Archive entry
       await tx.execute(
@@ -520,7 +520,7 @@ class BackendNotifier extends ChangeNotifier {
             // Check for new unsynced data that appeared during fetch
             SyncLogger.log('[$tableName] onData: Checking unsynced...');
             final unsynced = await tx.getAll(
-              'select * from $tableName where is_unsynced = 1',
+              'select * from "$tableName" where is_unsynced = 1',
             );
             SyncLogger.log(
               '[$tableName] onData: Unsynced check complete: ${unsynced.length} records',
@@ -558,7 +558,7 @@ class BackendNotifier extends ChangeNotifier {
                 .join(', ');
             final sql =
                 '''
-INSERT INTO $tableName (${cols.join(', ')}) VALUES ($placeholders)
+INSERT INTO "$tableName" (${cols.join(', ')}) VALUES ($placeholders)
 ON CONFLICT($pk) DO UPDATE SET $updates;
 ''';
             final data = List<Map<String, dynamic>>.from(resp['data']);
@@ -1086,7 +1086,7 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
     final db = _db!;
     SyncLogger.log('[$tableName] _sendUnsyncedForTable: Querying unsynced rows...');
     final rows = await db.getAll(
-      'select ${abstractMetaEntity.syncableColumnsString[tableName]} from $tableName where is_unsynced = 1',
+      'select ${abstractMetaEntity.syncableColumnsString[tableName]} from "$tableName" where is_unsynced = 1',
     );
     SyncLogger.log('[$tableName] _sendUnsyncedForTable: Found ${rows.length} unsynced rows');
 
@@ -1151,7 +1151,7 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
     // Check if data changed during send and mark as synced if not
     final success = await db.writeTransaction((tx) async {
       final rows2 = await tx.getAll(
-        'select ${abstractMetaEntity.syncableColumnsString[tableName]} from $tableName where is_unsynced = 1',
+        'select ${abstractMetaEntity.syncableColumnsString[tableName]} from "$tableName" where is_unsynced = 1',
       );
 
       if (DeepCollectionEquality().equals(rows, rows2)) {
@@ -1160,14 +1160,14 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
           final id = entry.key;
           final ts = entry.value;
           await tx.execute(
-            'UPDATE $tableName SET ts = ? WHERE _id = ?',
+            'UPDATE "$tableName" SET ts = ? WHERE _id = ?',
             [ts, id],
           );
         }
 
         // Mark all as synced
         await tx.execute(
-          'update $tableName set is_unsynced = 0 where is_unsynced = 1',
+          'UPDATE "$tableName" SET is_unsynced = 0 WHERE is_unsynced = 1',
         );
         return true;
       } else {
