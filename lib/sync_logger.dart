@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:sentry/sentry.dart';
 
 /// Centralized logging system for Sistemium Sync Flutter library
 /// 
@@ -15,37 +16,39 @@ class SyncLogger {
     Object? error,
     StackTrace? stackTrace,
   }) {
-    if (!kDebugMode) return;
-    
-    // Get caller information using StackTrace
-    final callerInfo = _getCallerInfo();
-    
-    // Format timestamp
-    final timestamp = DateTime.now();
-    final timeStr = '${timestamp.hour.toString().padLeft(2, '0')}:'
-                   '${timestamp.minute.toString().padLeft(2, '0')}:'
-                   '${timestamp.second.toString().padLeft(2, '0')}.'
-                   '${timestamp.millisecond.toString().padLeft(3, '0')}';
-    
-    // Build log message
-    final buffer = StringBuffer();
-    buffer.write('[$timeStr] ');
-    
-    // Add file and line info
-    if (callerInfo != null) {
-      buffer.write('[${callerInfo.file}:${callerInfo.line}] ');
-    }
-    
-    buffer.write(message);
-    
-    // Use print for output (only in debug mode)
-    print(buffer.toString());
-    
-    // Print error and stack trace if provided
-    if (error != null) {
-      print('Error: $error');
-      if (stackTrace != null) {
-        print('Stack trace:\n$stackTrace');
+    if (kDebugMode) {
+      // Debug mode: console logging
+      final callerInfo = _getCallerInfo();
+
+      final timestamp = DateTime.now();
+      final timeStr = '${timestamp.hour.toString().padLeft(2, '0')}:'
+                     '${timestamp.minute.toString().padLeft(2, '0')}:'
+                     '${timestamp.second.toString().padLeft(2, '0')}.'
+                     '${timestamp.millisecond.toString().padLeft(3, '0')}';
+
+      final buffer = StringBuffer();
+      buffer.write('[$timeStr] ');
+
+      if (callerInfo != null) {
+        buffer.write('[${callerInfo.file}:${callerInfo.line}] ');
+      }
+
+      buffer.write(message);
+
+      print(buffer.toString());
+
+      if (error != null) {
+        print('Error: $error');
+        if (stackTrace != null) {
+          print('Stack trace:\n$stackTrace');
+        }
+      }
+    } else if (Sentry.isEnabled) {
+      // Release mode with Sentry: forward to Sentry
+      if (error != null) {
+        Sentry.logger.error(message);
+      } else {
+        Sentry.logger.info(message);
       }
     }
   }
