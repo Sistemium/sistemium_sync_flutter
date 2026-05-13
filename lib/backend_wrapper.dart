@@ -10,8 +10,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:sistemium_sync_flutter/sync_abstract.dart';
 import 'package:sistemium_sync_flutter/sync_logger.dart';
-import 'package:sqlite_async/sqlite3.dart';
-import 'package:sqlite_async/sqlite3_common.dart';
+import 'package:sqlite3/common.dart';
 import 'package:sqlite_async/sqlite_async.dart';
 
 const int _fetchPageSize = 10000;
