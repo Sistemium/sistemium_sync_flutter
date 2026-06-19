@@ -1,5 +1,13 @@
 # Sistemium Sync Flutter: Project Knowledge Base
 
+> ## ⚠️ This is a GENERIC, schema-driven library — never hardcode models or fields
+>
+> The library knows **nothing** about specific entities or business fields. The client schema (tables, columns, migrations) is generated from the server's **`models.json`** into `pregenerated.dart` (via `sync_generator`); `BackendNotifier` operates generically over whatever that schema defines.
+>
+> **Do NOT** put a model name or business field name (`ServiceTask`, `Lead`, `ndoc`, `protocolNumber`, …) into this library. The only fields it may special-case are **sync-protocol** fields present on every entity (e.g. `ts`, `is_unsynced`).
+>
+> Field rules such as "read-only" or "server-generated" are enforced in the **app** (`vfs_master`'s UI) and driven by the schema/backend — never by special-casing this generic library.
+
 ## 1. Project Overview
 
 `sistemium_sync_flutter` is a Flutter library responsible for providing data synchronization capabilities between a Flutter application and the `sistemium_sync_service` backend. It manages a local SQLite database, handles fetching and sending data, and provides reactive streams for UI updates.
