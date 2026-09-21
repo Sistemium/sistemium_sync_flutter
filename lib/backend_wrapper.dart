@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 import 'package:objectid/objectid.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+import 'package:sistemium_sync_flutter/shadow_tables.dart';
 import 'package:sistemium_sync_flutter/sync_abstract.dart';
 import 'package:sistemium_sync_flutter/sync_logger.dart';
 import 'package:sqlite3/common.dart';
@@ -745,6 +746,13 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
 
     if (shadowSyncingExists.isNotEmpty) {
       SyncLogger.log('Found existing shadow tables, resuming resync...');
+      // The app may have been updated since the job started
+      await dbLocal.writeTransaction(
+        (tx) => ShadowTables.repair(
+          tx,
+          isSyncable: abstractMetaEntity.syncableColumnsList.containsKey,
+        ),
+      );
       // Jump to step 6 - process shadow syncing table
       await _processShadowSync(dbLocal);
       return;
@@ -838,20 +846,7 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
           );
 
           // Create shadow table for entity with proper structure
-          // First get the table structure
-          final tableInfo = await tx.getAll('PRAGMA table_info("$table")');
-          final columns = tableInfo
-              .map((col) {
-                final name = col['name'];
-                final type = col['type'];
-                final notNull = col['notnull'] == 1 ? 'NOT NULL' : '';
-                final pk = col['pk'] == 1 ? 'PRIMARY KEY' : '';
-                return '"$name" $type $notNull $pk';
-              })
-              .join(', ');
-
-          await tx.execute('DROP TABLE IF EXISTS "${table}_shadow"');
-          await tx.execute('CREATE TABLE "${table}_shadow" ($columns)');
+          await ShadowTables.create(tx, table);
         }
       }
 
