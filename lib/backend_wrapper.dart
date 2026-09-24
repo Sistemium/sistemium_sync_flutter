@@ -96,6 +96,14 @@ class BackendNotifier extends ChangeNotifier {
   }
 
   Future<void> deinitDb() async {
+    await _stopSyncing();
+    if (_db != null) await _db!.close();
+    _db = null;
+    notifyListeners();
+  }
+
+  /// Stops the server side of the sync: the SSE stream and the retry timers.
+  Future<void> _stopSyncing() async {
     await _eventSubscription?.cancel();
     _eventSubscription = null;
     _sseClient?.close();
@@ -107,9 +115,38 @@ class BackendNotifier extends ChangeNotifier {
       timer?.cancel();
     }
     _retryTimers.clear();
+  }
 
-    if (_db != null) await _db!.close();
-    _db = null;
+  /// Empties the local database and rebuilds its schema in place, so the
+  /// next sync starts from nothing: every table goes (the migration table
+  /// with them, which is what makes [AbstractPregeneratedMigrations] create
+  /// the schema afresh), the system tables are registered again and the
+  /// syncer restarts with empty cursors.
+  ///
+  /// This is the only way to start over while the app runs. Deleting the
+  /// database files does not work: the connection pool is shared per path for
+  /// the whole process and survives [deinitDb], so a new database opened on
+  /// the same path re-attaches to the old, already unlinked file and keeps
+  /// serving its data until the next launch.
+  Future<void> resetDb() async {
+    final db = _db;
+    if (db == null) {
+      throw StateError('resetDb called before initDb');
+    }
+    await _stopSyncing();
+    await db.writeTransaction((tx) async {
+      final tables = await tx.getAll(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+      );
+      for (final row in tables) {
+        await tx.execute('DROP TABLE IF EXISTS "${row['name']}"');
+      }
+    });
+    SyncLogger.log('Local database emptied, rebuilding the schema');
+    await abstractPregeneratedMigrations.migrations.migrate(db);
+    await _ensureTableRegistration(db, 'RulesBoard');
+    await _ensureTableRegistration(db, 'Archive');
+    _startSyncer();
     notifyListeners();
   }
 
@@ -215,7 +252,11 @@ class BackendNotifier extends ChangeNotifier {
     if (parameters == null) {
       return _db!.watch(sql, triggerOnTables: triggerOnTables);
     }
-    return _db!.watch(sql, parameters: parameters, triggerOnTables: triggerOnTables);
+    return _db!.watch(
+      sql,
+      parameters: parameters,
+      triggerOnTables: triggerOnTables,
+    );
   }
 
   Future<ResultSet> getAll(String sql, [List<Object?>? parameters]) {
@@ -235,7 +276,10 @@ class BackendNotifier extends ChangeNotifier {
     }
   }
 
-  Future<void> executeBatch(String sql, List<List<Object?>> parameterSets) async {
+  Future<void> executeBatch(
+    String sql,
+    List<List<Object?>> parameterSets,
+  ) async {
     if (_db == null) throw Exception('Database not initialized');
     await _db!.executeBatch(sql, parameterSets);
   }
@@ -285,7 +329,8 @@ class BackendNotifier extends ChangeNotifier {
       ON CONFLICT(_id) DO UPDATE SET $updatePlaceholders, is_unsynced = 1
     ''';
     await db!.execute(sql, [...values, ...values]);
-    if (tx == null && abstractMetaEntity.syncableColumnsList.containsKey(tableName)) {
+    if (tx == null &&
+        abstractMetaEntity.syncableColumnsList.containsKey(tableName)) {
       _addToSyncQueue(
         SyncQueueItem(
           method: 'sendUnsynced',
@@ -396,18 +441,24 @@ class BackendNotifier extends ChangeNotifier {
 
     SyncLogger.log('[$name] _fetchData: GET $uri');
     final res = await http.get(uri, headers: headers);
-    SyncLogger.log('[$name] _fetchData: Response status ${res.statusCode}, body length: ${res.body.length}');
+    SyncLogger.log(
+      '[$name] _fetchData: Response status ${res.statusCode}, body length: ${res.body.length}',
+    );
     if (res.statusCode == 200) {
       SyncLogger.log('[$name] _fetchData: Parsing response in isolate...');
       final data = await compute(_parseJsonInIsolate, res.body);
-      SyncLogger.log('[$name] _fetchData: Parse complete, data keys: ${data.keys.toList()}, data count: ${(data['data'] as List?)?.length ?? 0}');
+      SyncLogger.log(
+        '[$name] _fetchData: Parse complete, data keys: ${data.keys.toList()}, data count: ${(data['data'] as List?)?.length ?? 0}',
+      );
       SyncLogger.log('[$name] _fetchData: Calling onData callback...');
       await onData(data);
       SyncLogger.log('[$name] _fetchData: onData callback complete');
     } else {
       SyncLogger.log('HTTP Error ${res.statusCode} for $uri');
       SyncLogger.log('Response body: ${res.body}');
-      throw Exception('Failed to fetch data: HTTP ${res.statusCode} - ${res.body}');
+      throw Exception(
+        'Failed to fetch data: HTTP ${res.statusCode} - ${res.body}',
+      );
     }
   }
 
@@ -469,9 +520,13 @@ class BackendNotifier extends ChangeNotifier {
     bool sendSuccess = false;
     int retryCount = 0;
     while (!sendSuccess && retryCount < 3) {
-      SyncLogger.log('[$tableName] Calling _sendUnsyncedForTable (attempt ${retryCount + 1})...');
+      SyncLogger.log(
+        '[$tableName] Calling _sendUnsyncedForTable (attempt ${retryCount + 1})...',
+      );
       sendSuccess = await _sendUnsyncedForTable(tableName);
-      SyncLogger.log('[$tableName] _sendUnsyncedForTable returned: $sendSuccess');
+      SyncLogger.log(
+        '[$tableName] _sendUnsyncedForTable returned: $sendSuccess',
+      );
       if (!sendSuccess) {
         retryCount++;
         SyncLogger.log(
@@ -489,7 +544,9 @@ class BackendNotifier extends ChangeNotifier {
     SyncLogger.log('[$tableName] Step 1 complete: Unsynced data sent');
 
     // Get the last received timestamp for this table
-    SyncLogger.log('[$tableName] Step 2: Getting last_received_ts from syncing_table...');
+    SyncLogger.log(
+      '[$tableName] Step 2: Getting last_received_ts from syncing_table...',
+    );
     final syncingInfo = await _db!.getAll(
       'SELECT * FROM syncing_table WHERE entity_name = ?',
       [tableName],
@@ -515,7 +572,9 @@ class BackendNotifier extends ChangeNotifier {
         lastReceivedTs: ts,
         pageSize: page,
         onData: (resp) async {
-          SyncLogger.log('[$tableName] onData: Got response, starting transaction');
+          SyncLogger.log(
+            '[$tableName] onData: Got response, starting transaction',
+          );
           await _db!.writeTransaction((tx) async {
             // Check for new unsynced data that appeared during fetch
             SyncLogger.log('[$tableName] onData: Checking unsynced...');
@@ -541,10 +600,14 @@ class BackendNotifier extends ChangeNotifier {
               return;
             }
 
-            SyncLogger.log('[$tableName] onData: Processing ${resp['data']?.length ?? 0} rows');
+            SyncLogger.log(
+              '[$tableName] onData: Processing ${resp['data']?.length ?? 0} rows',
+            );
 
             if ((resp['data']?.length ?? 0) == 0) {
-              SyncLogger.log('[$tableName] onData: No data received, stopping fetch');
+              SyncLogger.log(
+                '[$tableName] onData: No data received, stopping fetch',
+              );
               more = false;
               return;
             }
@@ -562,7 +625,9 @@ INSERT INTO "$tableName" (${cols.join(', ')}) VALUES ($placeholders)
 ON CONFLICT($pk) DO UPDATE SET $updates;
 ''';
             final data = List<Map<String, dynamic>>.from(resp['data']);
-            SyncLogger.log('[$tableName] onData: Inserting ${data.length} rows, last ts: ${data.last['ts']}');
+            SyncLogger.log(
+              '[$tableName] onData: Inserting ${data.length} rows, last ts: ${data.last['ts']}',
+            );
 
             final batch = data
                 .map<List<Object?>>(
@@ -582,10 +647,14 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
 
             if (data.length < page) {
               more = false;
-              SyncLogger.log('[$tableName] onData: Last page received (${data.length} < $page)');
+              SyncLogger.log(
+                '[$tableName] onData: Last page received (${data.length} < $page)',
+              );
             } else {
               ts = data.last['ts'];
-              SyncLogger.log('[$tableName] onData: More pages expected, next ts: $ts');
+              SyncLogger.log(
+                '[$tableName] onData: More pages expected, next ts: $ts',
+              );
             }
           });
           SyncLogger.log('[$tableName] onData: Transaction complete');
@@ -621,10 +690,14 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
       for (var table in tables) {
         tableIndex++;
         final tableName = table['entity_name'] as String;
-        SyncLogger.log('>>> SYNC [$tableIndex/${tables.length}] Starting: $tableName');
+        SyncLogger.log(
+          '>>> SYNC [$tableIndex/${tables.length}] Starting: $tableName',
+        );
         try {
           await syncTable(tableName);
-          SyncLogger.log('>>> SYNC [$tableIndex/${tables.length}] Completed: $tableName');
+          SyncLogger.log(
+            '>>> SYNC [$tableIndex/${tables.length}] Completed: $tableName',
+          );
         } catch (e, stackTrace) {
           SyncLogger.log(
             '>>> SYNC [$tableIndex/${tables.length}] FAILED: $tableName - $e',
@@ -768,7 +841,9 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
       return;
     }
 
-    SyncLogger.log('Found ${rulesEntries.length} RulesBoard entries to process');
+    SyncLogger.log(
+      'Found ${rulesEntries.length} RulesBoard entries to process',
+    );
 
     // Collect all unique table names from all entries
     final Set<String> allTablesToResync = {};
@@ -793,7 +868,9 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
           }
         }
       } catch (e) {
-        SyncLogger.log('Failed to parse fullResyncCollections for entry ${entry['_id']}: $e');
+        SyncLogger.log(
+          'Failed to parse fullResyncCollections for entry ${entry['_id']}: $e',
+        );
       }
     }
 
@@ -811,7 +888,11 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
     SyncLogger.log('Unique tables to resync: ${allTablesToResync.join(', ')}');
 
     // Process all unique tables at once
-    await _processRulesBoardTables(dbLocal, allTablesToResync.toList(), entryIds);
+    await _processRulesBoardTables(
+      dbLocal,
+      allTablesToResync.toList(),
+      entryIds,
+    );
   }
 
   Future<void> _processRulesBoardTables(
@@ -819,7 +900,9 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
     List<String> tablesToResync,
     List<String> entryIds,
   ) async {
-    SyncLogger.log('Processing ${tablesToResync.length} unique tables from ${entryIds.length} RulesBoard entries');
+    SyncLogger.log(
+      'Processing ${tablesToResync.length} unique tables from ${entryIds.length} RulesBoard entries',
+    );
 
     // Step 4: Create shadow tables for all unique tables
     await db.writeTransaction((tx) async {
@@ -1078,14 +1161,20 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
 
   Future<bool> _sendUnsyncedForTable(String tableName) async {
     final db = _db!;
-    SyncLogger.log('[$tableName] _sendUnsyncedForTable: Querying unsynced rows...');
+    SyncLogger.log(
+      '[$tableName] _sendUnsyncedForTable: Querying unsynced rows...',
+    );
     final rows = await db.getAll(
       'select ${abstractMetaEntity.syncableColumnsString[tableName]} from "$tableName" where is_unsynced = 1',
     );
-    SyncLogger.log('[$tableName] _sendUnsyncedForTable: Found ${rows.length} unsynced rows');
+    SyncLogger.log(
+      '[$tableName] _sendUnsyncedForTable: Found ${rows.length} unsynced rows',
+    );
 
     if (rows.isEmpty) {
-      SyncLogger.log('[$tableName] _sendUnsyncedForTable: No unsynced data, returning success');
+      SyncLogger.log(
+        '[$tableName] _sendUnsyncedForTable: No unsynced data, returning success',
+      );
       return true; // Nothing to send, success
     }
 
@@ -1098,13 +1187,17 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
       headers['authorization'] = _authToken!;
     }
 
-    SyncLogger.log('[$tableName] _sendUnsyncedForTable: POSTing ${rows.length} rows to server...');
+    SyncLogger.log(
+      '[$tableName] _sendUnsyncedForTable: POSTing ${rows.length} rows to server...',
+    );
     final res = await http.post(
       uri,
       headers: headers,
       body: jsonEncode({'name': tableName, 'data': jsonEncode(rows)}),
     );
-    SyncLogger.log('[$tableName] _sendUnsyncedForTable: POST response status: ${res.statusCode}');
+    SyncLogger.log(
+      '[$tableName] _sendUnsyncedForTable: POST response status: ${res.statusCode}',
+    );
 
     if (res.statusCode != 200) {
       SyncLogger.log(
@@ -1137,9 +1230,7 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
     } catch (e) {
       // If response parsing fails, just continue without ts updates
       // This handles old server versions or unexpected response formats
-      SyncLogger.log(
-        'Could not parse ts from response (old server?): $e',
-      );
+      SyncLogger.log('Could not parse ts from response (old server?): $e');
     }
 
     // Check if data changed during send and mark as synced if not
@@ -1153,10 +1244,10 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
         for (final entry in tsMap.entries) {
           final id = entry.key;
           final ts = entry.value;
-          await tx.execute(
-            'UPDATE "$tableName" SET ts = ? WHERE _id = ?',
-            [ts, id],
-          );
+          await tx.execute('UPDATE "$tableName" SET ts = ? WHERE _id = ?', [
+            ts,
+            id,
+          ]);
         }
 
         // Mark all as synced
