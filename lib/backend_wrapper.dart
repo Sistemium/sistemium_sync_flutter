@@ -55,6 +55,11 @@ class BackendNotifier extends ChangeNotifier {
   final List<SyncQueueItem> _syncQueue = [];
   final ValueNotifier<bool> isProcessingQueue = ValueNotifier<bool>(false);
 
+  // A table's send and fetch run one at a time. An app can pull a table at any
+  // moment, also during the full sync, and two at once would post the same
+  // unsynced rows twice.
+  final Map<String, Future<void>> _tableSyncs = {};
+
   BackendNotifier({
     required this.abstractPregeneratedMigrations,
     required this.abstractSyncConstants,
@@ -512,7 +517,23 @@ class BackendNotifier extends ChangeNotifier {
     SyncLogger.log('Queue processing complete');
   }
 
-  Future<void> syncTable(String tableName) async {
+  /// Sends this table's unsynced rows and fetches what is new. An app may call it
+  /// at any moment, outside the queue, to have a table now rather than in its turn.
+  Future<void> syncTable(String tableName) {
+    final previous = _tableSyncs[tableName];
+    final run = previous == null
+        ? _syncTableNow(tableName)
+        : previous
+              .then<void>((_) {}, onError: (Object _, StackTrace _) {})
+              .then((_) => _syncTableNow(tableName));
+    _tableSyncs[tableName] = run;
+    run.whenComplete(() {
+      if (identical(_tableSyncs[tableName], run)) _tableSyncs.remove(tableName);
+    }).ignore();
+    return run;
+  }
+
+  Future<void> _syncTableNow(String tableName) async {
     SyncLogger.log('Starting sync for table: $tableName');
 
     // First send any unsynced data for this table
@@ -706,6 +727,7 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
           );
           // Continue with next table instead of stopping entire sync
         }
+        await _runQueuedTableSyncs();
       }
 
       SyncLogger.log('End of sync cycle');
@@ -718,6 +740,27 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
     }
 
     SyncLogger.log('Full sync complete');
+  }
+
+  /// The table syncs waiting in the queue: a live update that came during the full
+  /// sync reaches the phone after the table in hand, not after the last one.
+  Future<void> _runQueuedTableSyncs() async {
+    while (_db != null) {
+      final index = _syncQueue.indexWhere((item) => item.method == 'syncTable');
+      if (index < 0) return;
+      final item = _syncQueue.removeAt(index);
+      final tableName = item.arguments['tableName'] as String;
+      SyncLogger.log('Queued table during the full sync: $tableName');
+      try {
+        await syncTable(tableName);
+      } catch (e, stackTrace) {
+        SyncLogger.log(
+          'Error syncing queued table $tableName: $e',
+          error: e,
+          stackTrace: stackTrace,
+        );
+      }
+    }
   }
 
   // -----------------------------------------------------------------------
