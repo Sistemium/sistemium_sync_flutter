@@ -391,11 +391,19 @@ authorization: your-auth-token
       "message": "Document inserted",
       "_id": "507f1f77bcf86cd799439011",
       "ts": "2025-01-15T12:34:56.789Z-0000000001",
+      "stored": {...},
       "doc": {...}
     }
   ]
 }
 ```
+
+`stored` is the row as the server holds it after the write, shaped as GET /data
+sends rows: what was sent plus what a hook or the server filled (a document
+number, cts). The library writes it into the local row with the ts
+(`SentRows.apply`), so the copy really is that version; a row edited during the
+send keeps its edits and goes again as an update. A server without `stored` is
+handled as before, with the ts alone.
 
 ## Error Handling
 
@@ -431,6 +439,7 @@ authorization: your-auth-token
 
 ## Version History
 
+**v2.11.0** - A send's reply settles each row with the server's stored row, not only its ts (`lib/sent_rows.dart`)
 **v2.5.7** - Complete sqlite_async API wrappers, ts field protection
 **v2.5.6** - Simplified wrapper methods to match sqlite_async exactly
 **v2.5.5** - Added isInitialized getter

@@ -9,6 +9,7 @@ import 'package:objectid/objectid.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:sistemium_sync_flutter/shadow_tables.dart';
+import 'package:sistemium_sync_flutter/sent_rows.dart';
 import 'package:sistemium_sync_flutter/sync_abstract.dart';
 import 'package:sistemium_sync_flutter/sync_logger.dart';
 import 'package:sqlite3/common.dart';
@@ -1250,60 +1251,30 @@ ON CONFLICT($pk) DO UPDATE SET $updates;
       return false;
     }
 
-    // Parse response to extract ts values (if server provides them)
-    Map<String, String> tsMap = {};
-    try {
-      final responseBody = jsonDecode(res.body);
-      if (responseBody is Map && responseBody['resuts'] is List) {
-        for (final result in responseBody['resuts']) {
-          if (result is Map &&
-              result['_id'] != null &&
-              result['ts'] != null &&
-              result['ignored'] != true) {
-            // Only use ts if it's not an ignored/conflict entry
-            tsMap[result['_id'].toString()] = result['ts'].toString();
-          }
-        }
-        if (tsMap.isNotEmpty) {
-          SyncLogger.log(
-            'Received ${tsMap.length} ts values from server for $tableName',
-          );
-        }
-      }
-    } catch (e) {
-      // If response parsing fails, just continue without ts updates
-      // This handles old server versions or unexpected response formats
-      SyncLogger.log('Could not parse ts from response (old server?): $e');
+    // What the server stored for each row: its ts, and from servers that send
+    // it the row itself, with what a hook or the server filled (a number, cts).
+    final replies = SentRows.parseReplies(res.body);
+    if (replies.isNotEmpty) {
+      SyncLogger.log(
+        'Received ${replies.length} replies from server for $tableName',
+      );
     }
 
-    // Check if data changed during send and mark as synced if not
-    final success = await db.writeTransaction((tx) async {
-      final rows2 = await tx.getAll(
-        'select ${abstractMetaEntity.syncableColumnsString[tableName]} from "$tableName" where is_unsynced = 1',
-      );
-
-      if (DeepCollectionEquality().equals(rows, rows2)) {
-        // Update ts for each document that has one from server
-        for (final entry in tsMap.entries) {
-          final id = entry.key;
-          final ts = entry.value;
-          await tx.execute('UPDATE "$tableName" SET ts = ? WHERE _id = ?', [
-            ts,
-            id,
-          ]);
-        }
-
-        // Mark all as synced
-        await tx.execute(
-          'UPDATE "$tableName" SET is_unsynced = 0 WHERE is_unsynced = 1',
-        );
-        return true;
-      } else {
-        SyncLogger.log('Data changed during send for $tableName, needs retry');
-        return false;
-      }
-    });
-
+    final columns = abstractMetaEntity.syncableColumnsList[tableName]!
+        .map((column) => column.toString())
+        .toList();
+    final success = await db.writeTransaction(
+      (tx) => SentRows.apply(
+        tx,
+        tableName: tableName,
+        columns: columns,
+        sent: [for (final row in rows) Map<String, Object?>.from(row)],
+        replies: replies,
+      ),
+    );
+    if (!success) {
+      SyncLogger.log('Data changed during send for $tableName, needs retry');
+    }
     return success;
   }
 

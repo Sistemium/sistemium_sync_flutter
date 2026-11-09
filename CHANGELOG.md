@@ -1,3 +1,9 @@
+## 2.11.0
+
+* FIX: a row's next send no longer clears what the server filled on insert. The POST /data reply's ts used to go into the local row alone, so the copy held the server's version with a hook's document number (INC, TASK) still empty, and its next save cleared the number on the server. Rows now take the reply's `stored` row with the ts (servers from 2026-11 send it; older ones work as before).
+* FIX: a row edited while its send was on the way keeps the edit, takes the server's ts and stored values for the columns it didn't edit, and goes next as an update. Before, the whole batch was left without its ts, so the edit went as a second insert, which the server refuses.
+* Each sent row is settled on its own; a row written during the send waits for the next one.
+
 ## 2.5.9
 
 * FIX: Add onDone handler to SSE stream listener for proper disconnect detection
